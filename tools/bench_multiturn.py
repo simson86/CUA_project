@@ -150,7 +150,8 @@ def run_task(client, bridge, task, level, max_turns, tag) -> dict:
         "done": done, "turns": turns, "actions": actions, "errors": errors,
         "wall": wall, "tok_total": acc["total"] or (acc["input"] + acc["output"] + acc["thought"]),
         "cost": cost_usd(acc, PRICE_IN, PRICE_OUT),
-        "final_text": (final_text(interaction) or "")[:80], "shot": shot_path,
+        "final_text": (final_text(interaction) or "").replace("\n", " ")[:300],
+        "shot": shot_path,
     }
 
 
@@ -262,6 +263,8 @@ def main():
                     print(f"  run {r}: {'완주' if m['done'] else '미완'} "
                           f"턴{m['turns']} 액션{m['actions']} 에러{m['errors']} "
                           f"{m['wall']:.1f}s ${m['cost']:.6f}", flush=True)
+                    if m.get("final_text"):     # '알려줘'류 작업의 실제 답변 텍스트
+                        print(f"      답변: {m['final_text']}", flush=True)
                 per_level[lv] = agg(runs_data)
             results.append((task, per_level))
             if out:  # 작업마다 중간 저장
