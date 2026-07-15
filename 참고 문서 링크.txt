@@ -1,0 +1,4 @@
+https://blog.google/innovation-and-ai/models-and-research/google-deepmind/gemini-computer-use-model/
+https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-computer-use-gemini-3-5-flash/
+https://ai.google.dev/gemini-api/docs/computer-use?hl=ko#safety-security
+https://github.com/google-gemini/gemini-android-computer-use-quickstart/tree/main

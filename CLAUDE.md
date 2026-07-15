@@ -36,6 +36,9 @@ It uses `subprocess.run(..., text=True)`, so adb output containing non-ASCII (e.
 ## Session continuity — read this first
 **At the start of a session, read the most recent `docs/progress/YYYY-MM-DD.md`** to recover what was done and stay consistent across terminal restarts. These dated files are the durable progress journal (tracked in git), auto-generated from commit history — so write **descriptive commit messages**, since they become the journal entries.
 
+## Gemini Computer Use reference
+**`docs/reference/gemini-computer-use.md`** distills the 4 official sources (DeepMind/Flash announcements, the CU API + safety docs, and the `gemini-android-computer-use-quickstart` repo our code derives from). Treat it as the *spec* for what this project implements — consult it before adding actions, touching coordinates, or changing the safety/loop flow. Key facts: model `gemini-3.5-flash` with `environment:"mobile"`; actions returned as function_calls dispatched to same-named `ADBBridge` methods; coords 0–1000 normalized; `safety_decision:"require_confirmation"` must be acknowledged (we auto-ack in the demo); the quickstart's `click(y, x)` has **swapped arg order** — ours uses `(x, y)`.
+
 ## Automation & repo conventions
 - **Auto-commit:** a `Stop` hook in `.claude/settings.local.json` runs `git add -A` + commits (message `[auto] <timestamp>`) at the end of each turn, only when something changed. Make your own descriptive commits for real work; the hook is a safety net.
 - **On every commit**, `.git/hooks/post-commit` regenerates two things (via `py tools/*.py`):
