@@ -86,12 +86,16 @@ def reset_home(bridge):
         time.sleep(0.8)
 
 
-def run_task(client, bridge, task, level, max_turns, tag) -> dict:
-    """한 작업을 끝까지(또는 max_turns) 수행하며 지표 수집."""
+def run_task(client, bridge, task, level, max_turns, tag, per_turn=False) -> dict:
+    """한 작업을 끝까지(또는 max_turns) 수행하며 지표 수집.
+
+    per_turn=True 면 매 모델 호출(턴)의 API 지연·토큰을 그때그때 출력한다.
+    """
     reset_home(bridge)
     time.sleep(0.5)
     acc = {"input": 0, "output": 0, "thought": 0, "total": 0}
     api_lat = 0.0   # 순수 모델 호출 시간 합(벽시계와 분리 → 네트워크 지연/재시도 포함)
+    call_idx = 0
 
     def add(interaction):
         tk = usage_tokens(interaction)
@@ -99,10 +103,17 @@ def run_task(client, bridge, task, level, max_turns, tag) -> dict:
             acc[k] += tk.get(k, 0)
 
     def timed_create(fn):
-        nonlocal api_lat
+        nonlocal api_lat, call_idx
         s = time.perf_counter()
         r = call_with_retry(fn)
-        api_lat += time.perf_counter() - s
+        dt = time.perf_counter() - s
+        api_lat += dt
+        call_idx += 1
+        if per_turn:
+            tk = usage_tokens(r)
+            tot = tk["total"] or (tk["input"] + tk["output"] + tk["thought"])
+            print(f"      턴{call_idx}: API {dt:5.1f}s | in={tk['input']} "
+                  f"out={tk['output']} thought={tk['thought']} 총={tot}", flush=True)
         return r
 
     t0 = time.perf_counter()
@@ -241,6 +252,8 @@ def main():
     ap.add_argument("--price-in", type=float, default=None)
     ap.add_argument("--price-out", type=float, default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--per-turn", action="store_true",
+                    help="매 턴(모델 호출)의 API 지연·토큰을 그때그때 출력")
     args = ap.parse_args()
 
     price = PRICING.get(args.model, {"in": 0.0, "out": 0.0})
@@ -274,7 +287,8 @@ def main():
                 runs_data = []
                 for r in range(1, args.runs + 1):
                     tag = f"t{ti}_{lv}_run{r}"
-                    m = run_task(client, bridge, task, lv, args.max_turns, tag)
+                    m = run_task(client, bridge, task, lv, args.max_turns, tag,
+                                 per_turn=args.per_turn)
                     runs_data.append(m)
                     print(f"  run {r}: {'완주' if m['done'] else '미완'} "
                           f"턴{m['turns']} 액션{m['actions']} 에러{m['errors']} | "
