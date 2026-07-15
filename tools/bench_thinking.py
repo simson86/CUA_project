@@ -199,22 +199,33 @@ def main():
     print(f"수준: {levels} | 반복: {args.runs} | 총 호출 {total_calls}회")
     print("-" * 60)
 
-    results = []
-    for ti, task in enumerate(tasks, 1):
-        print(f"\n=== 명령 {ti}/{len(tasks)}: {task} ===")
-        rows = []
-        for lv in levels:
-            print(f"[{lv}] 측정 중...")
-            rows.append(measure(client, task, shot, lv, args.runs, price_in, price_out))
-        results.append((task, rows))
-
-    md = render_md(results, args.model, args.runs, price_in, price_out)
-    print("\n" + md)
+    out = None
     if args.out:
         out = args.out if os.path.isabs(args.out) else os.path.join(_REPO_ROOT, args.out)
         os.makedirs(os.path.dirname(out), exist_ok=True)
+
+    def save_partial(res, done):
+        """명령 하나 끝날 때마다 중간 저장 → 도중에 끊겨도 완료분은 보존."""
+        if not out:
+            return
+        md = render_md(res, args.model, args.runs, price_in, price_out)
+        note = "" if done else f"\n> ⏳ 진행 중: {len(res)}/{len(tasks)} 명령 완료(중간 저장).\n"
         with open(out, "w", encoding="utf-8") as f:
-            f.write(md)
+            f.write(md + note)
+
+    results = []
+    for ti, task in enumerate(tasks, 1):
+        print(f"\n=== 명령 {ti}/{len(tasks)}: {task} ===", flush=True)
+        rows = []
+        for lv in levels:
+            print(f"[{lv}] 측정 중...", flush=True)
+            rows.append(measure(client, task, shot, lv, args.runs, price_in, price_out))
+        results.append((task, rows))
+        save_partial(results, done=(ti == len(tasks)))   # 매 명령 후 저장
+
+    md = render_md(results, args.model, args.runs, price_in, price_out)
+    print("\n" + md, flush=True)
+    if out:
         print(f"저장: {out}")
 
 
