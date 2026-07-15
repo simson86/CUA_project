@@ -1,0 +1,24 @@
+# ── 비밀/환경변수 (절대 커밋 금지) ──
+.env
+.env.*
+!.env.example
+
+# ── 파이썬 캐시/빌드 ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ── 가상환경 ──
+.venv/
+venv/
+env/
+
+# ── 실행 중 생성물 ──
+screen.png
+*.png
+
+# ── 로컬 IDE/도구 설정 ──
+.claude/settings.local.json
+.vscode/
+.idea/
