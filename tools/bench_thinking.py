@@ -114,13 +114,9 @@ def measure(client: CUClient, task: str, shot: bytes, level: str, runs: int,
     }
 
 
-def render_md(rows, model, task, runs, price_in, price_out) -> str:
-    L = [f"# 사고 수준 벤치마크 — {model}", "",
-         f"- 목표: `{task}`",
-         f"- 수준별 반복: {runs}회 평균",
-         f"- 단가(USD/1M tok): 입력 {price_in}, 출력+사고 {price_out} "
-         f"(⚠ https://ai.google.dev/pricing 에서 확인·갱신)", "",
-         "| 수준 | 평균 지연(s) | 지연 min~max | 입력tok | 출력tok | 사고tok | 총tok | 평균 비용($) |",
+def _table(rows) -> list:
+    """수준별 결과 표(마크다운 라인 리스트)."""
+    L = ["| 수준 | 평균 지연(s) | 지연 min~max | 입력tok | 출력tok | 사고tok | 총tok | 평균 비용($) |",
          "|---|---|---|---|---|---|---|---|"]
     for r in rows:
         L.append(
@@ -128,14 +124,53 @@ def render_md(rows, model, task, runs, price_in, price_out) -> str:
             f"{r['lat_min']:.2f}~{r['lat_max']:.2f} | {r['tok_in']:.0f} | "
             f"{r['tok_out']:.0f} | {r['tok_thought']:.0f} | {r['tok_total']:.0f} | "
             f"{r['cost_avg']:.6f} |")
-    L += ["", "> 사고tok(총thought) 이 수준에 따라 늘면 thinking_level 이 실제로 먹은 것.",
+    return L
+
+
+def render_md(results, model, runs, price_in, price_out) -> str:
+    """results: [(task, rows), ...]. 명령별 표 + 수준별 요약."""
+    L = [f"# 사고 수준 벤치마크 — {model}", "",
+         f"- 명령 {len(results)}개 · 수준별 {runs}회 평균",
+         f"- 단가(USD/1M tok): 입력 {price_in}, 출력+사고 {price_out} "
+         f"(⚠ https://ai.google.dev/pricing 에서 확인·갱신)",
+         "- 측정 단위: **현재 화면에서 그 명령의 '첫 판단 1회'** (멀티턴/실제 실행 아님)", ""]
+    for i, (task, rows) in enumerate(results, 1):
+        L += [f"## {i}. {task}", ""] + _table(rows) + [""]
+
+    # 수준별 요약(명령 전체 평균)
+    levels = [r["level"] for r in results[0][1]] if results else []
+    L += ["## 수준별 요약 (5개 명령 평균)", "",
+          "| 수준 | 평균 지연(s) | 평균 사고tok | 평균 총tok | 평균 비용($) |",
+          "|---|---|---|---|---|"]
+    for lv in levels:
+        picks = [r for _, rows in results for r in rows if r["level"] == lv]
+        n = len(picks) or 1
+        L.append(f"| {lv} | {sum(p['lat_avg'] for p in picks)/n:.2f} | "
+                 f"{sum(p['tok_thought'] for p in picks)/n:.0f} | "
+                 f"{sum(p['tok_total'] for p in picks)/n:.0f} | "
+                 f"{sum(p['cost_avg'] for p in picks)/n:.6f} |")
+    L += ["", "> 사고tok 이 수준에 따라 늘면 thinking_level 이 실제로 먹은 것.",
           "> 비용은 토큰×단가이므로 단가만 갱신하면 재계산됨."]
     return "\n".join(L) + "\n"
+
+
+def load_tasks(path: str) -> list:
+    """task 파일에서 명령들을 읽는다. '1. ', '5.' 같은 앞 번호는 떼어냄."""
+    import re
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            s = re.sub(r"^\s*\d+\.\s*", "", line.strip())
+            if s:
+                out.append(s)
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser(description="사고 수준별 속도·비용 측정")
     ap.add_argument("--task", default=DEFAULT_TASK)
+    ap.add_argument("--tasks-file", default=None,
+                    help="명령 목록 파일(줄마다 하나, 앞 번호는 자동 제거). 주면 --task 무시")
     ap.add_argument("--levels", default="minimal,low,medium,high")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--image", default=None)
@@ -150,18 +185,30 @@ def main():
     price_out = args.price_out if args.price_out is not None else price["out"]
     levels = [x.strip().lower() for x in args.levels.split(",") if x.strip()]
 
+    if args.tasks_file:
+        tf = args.tasks_file if os.path.isabs(args.tasks_file) \
+            else os.path.join(_REPO_ROOT, args.tasks_file)
+        tasks = load_tasks(tf)
+    else:
+        tasks = [args.task]
+
     shot = get_screenshot(args.image)
     client = CUClient(model=args.model)
-    print(f"모델: {args.model} | 목표: {args.task}")
-    print(f"수준: {levels} | 반복: {args.runs} | 총 호출 {len(levels) * args.runs}회")
+    total_calls = len(tasks) * len(levels) * args.runs
+    print(f"모델: {args.model} | 명령 {len(tasks)}개")
+    print(f"수준: {levels} | 반복: {args.runs} | 총 호출 {total_calls}회")
     print("-" * 60)
 
-    rows = []
-    for lv in levels:
-        print(f"[{lv}] 측정 중...")
-        rows.append(measure(client, args.task, shot, lv, args.runs, price_in, price_out))
+    results = []
+    for ti, task in enumerate(tasks, 1):
+        print(f"\n=== 명령 {ti}/{len(tasks)}: {task} ===")
+        rows = []
+        for lv in levels:
+            print(f"[{lv}] 측정 중...")
+            rows.append(measure(client, task, shot, lv, args.runs, price_in, price_out))
+        results.append((task, rows))
 
-    md = render_md(rows, args.model, args.task, args.runs, price_in, price_out)
+    md = render_md(results, args.model, args.runs, price_in, price_out)
     print("\n" + md)
     if args.out:
         out = args.out if os.path.isabs(args.out) else os.path.join(_REPO_ROOT, args.out)
