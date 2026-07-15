@@ -134,6 +134,7 @@ def run_task(client, bridge, task, level, max_turns, tag, per_turn=False) -> dic
             actions += 1
             data = {"status": "ok"}
             handler = getattr(bridge, action.name, None)
+            a0 = time.perf_counter()
             if handler is None:
                 data = {"status": "error", "error": f"Unknown action: {action.name}"}
                 errors += 1
@@ -145,6 +146,15 @@ def run_task(client, bridge, task, level, max_turns, tag, per_turn=False) -> dic
                 except Exception as e:
                     data = {"status": "error", "error": str(e)}
                     errors += 1
+            act_dt = time.perf_counter() - a0   # 액션(ADB 실행) 소요 시간
+            if per_turn:
+                shown = {k: v for k, v in action.args.items()
+                         if k not in ("intent", "safety_decision")}
+                s = str(shown)
+                if len(s) > 60:
+                    s = s[:60] + "…"
+                err = " [ERROR]" if data.get("status") == "error" else ""
+                print(f"        → {action.name} {s} [{act_dt:.2f}s]{err}", flush=True)
             safety_ack = "safety_decision" in action.args
             time.sleep(SETTLE_SEC)
             results.append(function_result(action.name, action.call_id,
@@ -244,6 +254,7 @@ def load_tasks(path):
 def main():
     global PRICE_IN, PRICE_OUT
     ap = argparse.ArgumentParser(description="멀티턴 완주 벤치(사고 수준별)")
+    ap.add_argument("--task", default=None, help="단일 작업 문장 (--tasks-file 없을 때)")
     ap.add_argument("--tasks-file", default=None)
     ap.add_argument("--levels", default="minimal,low,medium,high")
     ap.add_argument("--runs", type=int, default=2)
@@ -260,9 +271,13 @@ def main():
     PRICE_IN = args.price_in if args.price_in is not None else price["in"]
     PRICE_OUT = args.price_out if args.price_out is not None else price["out"]
     levels = [x.strip().lower() for x in args.levels.split(",") if x.strip()]
-    tasks = (load_tasks(args.tasks_file if os.path.isabs(args.tasks_file)
-             else os.path.join(_REPO_ROOT, args.tasks_file))
-             if args.tasks_file else DEFAULT_TASKS)
+    if args.tasks_file:
+        tasks = load_tasks(args.tasks_file if os.path.isabs(args.tasks_file)
+                           else os.path.join(_REPO_ROOT, args.tasks_file))
+    elif args.task:
+        tasks = [args.task]
+    else:
+        tasks = DEFAULT_TASKS
 
     out = None
     if args.out:
