@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CUA_run 사용법 — 라이브 에이전트 & 벤치마크</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1a1c20; --muted:#5b6570; --line:#e3e7ec;
+    --card:#f7f9fb; --code-bg:#f2f4f7; --code-fg:#1a1c20;
+    --accent:#2563eb; --accent-soft:#e8f0fe; --warn-bg:#fff7e6; --warn-line:#f0c674;
+    --term-bg:#0e1116; --term-fg:#d7dce3; --term-cmd:#7ee787; --term-muted:#8b949e;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0f1216; --fg:#e6e9ee; --muted:#9aa4b0; --line:#242a31;
+      --card:#161b22; --code-bg:#1b2027; --code-fg:#e6e9ee;
+      --accent:#6ea8fe; --accent-soft:#16233c; --warn-bg:#2a2314; --warn-line:#6b5416;
+      --term-bg:#0a0d11; --term-fg:#d7dce3; --term-cmd:#7ee787; --term-muted:#8b949e;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Malgun Gothic","맑은 고딕",sans-serif;}
+  .wrap{max-width:920px;margin:0 auto;padding:32px 20px 80px}
+  header{border-bottom:2px solid var(--line);padding-bottom:20px;margin-bottom:8px}
+  h1{font-size:28px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:15px}
+  h2{font-size:22px;margin:40px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+  h3{font-size:17px;margin:24px 0 8px}
+  p{margin:10px 0}
+  code{background:var(--code-bg);color:var(--code-fg);padding:2px 6px;border-radius:5px;
+    font-family:"Cascadia Code",Consolas,"SF Mono",Menlo,monospace;font-size:13.5px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .muted{color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+  .warn{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:8px;padding:12px 16px;margin:14px 0}
+  .term{background:var(--term-bg);color:var(--term-fg);border-radius:10px;padding:14px 16px;margin:12px 0;
+    overflow-x:auto;font-family:"Cascadia Code",Consolas,monospace;font-size:13px;line-height:1.55}
+  .term pre{margin:0;white-space:pre}
+  .term .cmd{color:var(--term-cmd)}
+  .term .c{color:var(--term-muted)}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft)}
+  td code{white-space:nowrap}
+  .pill{display:inline-block;background:var(--accent-soft);color:var(--accent);
+    border-radius:20px;padding:2px 10px;font-size:12.5px;font-weight:600;margin-right:6px}
+  .toc{columns:2;gap:24px;font-size:14.5px}
+  .toc a{display:block;padding:3px 0}
+  @media(max-width:560px){.toc{columns:1}}
+  ul{margin:10px 0;padding-left:22px}
+  li{margin:4px 0}
+  .kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px;font-size:12.5px;
+    background:var(--code-bg);font-family:monospace}
+  footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>CUA_run 사용법</h1>
+  <div class="sub">Gemini Computer Use 기반 안드로이드 자동화 — 라이브 에이전트 &amp; 벤치마크 실행 가이드</div>
+</header>
+
+<div class="card">
+  <strong>목차</strong>
+  <nav class="toc">
+    <a href="#prereq">0. 사전 준비</a>
+    <a href="#live">1. 라이브 에이전트 (main.py)</a>
+    <a href="#thinking">2. bench_thinking.py (첫 판단)</a>
+    <a href="#multiturn">3. bench_multiturn.py (완주)</a>
+    <a href="#perturn">4. 턴별 상세 (--per-turn)</a>
+    <a href="#metrics">5. 지표 읽는 법</a>
+    <a href="#thinklevel">6. 사고 수준 설정</a>
+    <a href="#tips">7. 팁 &amp; 주의</a>
+    <a href="#results">8. 측정 결과 문서</a>
+  </nav>
+</div>
+
+<div class="warn">
+  <strong>⚠ 공통 필수</strong> — 파이썬은 반드시 <code>py</code>로 실행하세요.
+  이 PC의 <code>python</code>은 msys2라 패키지가 없어 <code>ModuleNotFoundError</code>가 납니다.
+  모든 명령은 <strong>repo 루트</strong>에서 실행합니다.
+</div>
+
+<h2 id="prereq">0. 사전 준비</h2>
+<ul>
+  <li><strong>기기 연결:</strong> <code>adb devices</code>에 폰이 <code>device</code>로 표시되어야 함 (USB 디버깅 허용).</li>
+  <li><strong>API 키:</strong> <code>.env</code>에 <code>GEMINI_API_KEY=...</code> (템플릿은 <code>.env.example</code>).</li>
+  <li><strong>패키지:</strong> <code>py</code>에 <code>google-genai</code>, <code>python-dotenv</code> 설치돼 있음.</li>
+</ul>
+<div class="term"><pre><span class="c"># 연결 확인</span>
+<span class="cmd">adb devices</span>
+<span class="c"># 없으면 SDK 경로의 adb 직접 호출 (Windows)</span>
+<span class="cmd">& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" devices</span></pre></div>
+
+<h2 id="live">1. 라이브 에이전트 — <code>live/main.py</code></h2>
+<p>목표를 주면 <strong>실제로 작업을 수행</strong>합니다 (캡처→판단→실행 반복). 한글 입력은 ADBKeyboard로 처리되고 종료 시 원래 키보드로 복원됩니다.</p>
+<div class="term"><pre><span class="cmd">py live/main.py "설정 앱을 열어 다크 모드를 켜"</span>
+<span class="cmd">py live/main.py "유튜브에서 노래 틀어줘"</span>
+<span class="c"># 인자 없으면 기본값 "Open the Settings app"</span>
+<span class="cmd">py live/main.py</span></pre></div>
+<p class="muted">모놀리식 버전도 있음: <code>py mobile_agent/agent.py</code> (실행 후 작업을 물어봄).</p>
+
+<h2 id="thinking">2. 첫 판단 벤치 — <code>tools/bench_thinking.py</code></h2>
+<p><strong>"현재 화면에서 다음 액션 하나"를 정하는 한 번의 호출</strong>만 재서 사고 수준별 <strong>지연·토큰·비용</strong>을 비교합니다. 작업을 실제로 수행하진 않아 안전하고 빠릅니다.</p>
+<div class="term"><pre><span class="cmd">py tools/bench_thinking.py --levels minimal,low,medium,high --runs 3</span>
+<span class="c"># 여러 명령 파일로, 결과 저장까지</span>
+<span class="cmd">py tools/bench_thinking.py --tasks-file task.txt --out docs/reference/th.md</span>
+<span class="c"># 기기 없이 저장된 스크린샷으로</span>
+<span class="cmd">py tools/bench_thinking.py --image shot.png --levels low,high</span></pre></div>
+<h3>출력 예</h3>
+<div class="term"><pre><span class="c">[minimal] run 1/3:   8.36s  in=1170 out=41 thought=0</span>
+<span class="c">[low    ] run 1/3:   9.29s  in=1170 out=26 thought=99</span>
+<span class="c">... 이어서 수준별 평균 표(지연 min~max, 총tok, 비용)</span></pre></div>
+
+<h3>옵션</h3>
+<table>
+  <tr><th>옵션</th><th>기본</th><th>설명</th></tr>
+  <tr><td><code>--task "…"</code></td><td>설정 다크모드</td><td>측정할 목표 문장</td></tr>
+  <tr><td><code>--tasks-file</code></td><td>—</td><td>명령 목록 파일(줄마다 하나, 앞 번호 자동 제거)</td></tr>
+  <tr><td><code>--levels</code></td><td><code>minimal,low,medium,high</code></td><td>잴 사고 수준들(쉼표)</td></tr>
+  <tr><td><code>--runs</code></td><td><code>3</code></td><td>수준마다 반복(평균)</td></tr>
+  <tr><td><code>--image</code></td><td>—</td><td>이 PNG로 측정(기기 불필요)</td></tr>
+  <tr><td><code>--out</code></td><td>—</td><td>결과 마크다운 저장 경로</td></tr>
+  <tr><td><code>--price-in / --price-out</code></td><td>PRICING</td><td>1M 토큰당 USD 단가 덮어쓰기</td></tr>
+</table>
+
+<h2 id="multiturn">3. 완주 벤치 — <code>tools/bench_multiturn.py</code></h2>
+<p><strong>작업을 끝까지 수행</strong>시키며 수준별 완주율·턴/액션·에러·<strong>API지연·벽시계·총토큰·비용</strong>을 잽니다. 실제로 기기를 여러 스텝 조작하고 오래 걸립니다. <strong>안전·되돌릴 수 있는 작업만</strong> 쓰세요(구매·결제·전송 금지).</p>
+<div class="term"><pre><span class="cmd">py tools/bench_multiturn.py --tasks-file task.txt --levels minimal,low,medium --runs 2 --max-turns 15</span>
+<span class="c"># 단일 작업 한 번</span>
+<span class="cmd">py tools/bench_multiturn.py --task "삼성 노트에 메모 만들어줘" --levels low --runs 1</span>
+<span class="c"># 결과 저장</span>
+<span class="cmd">py tools/bench_multiturn.py --tasks-file task.txt --out docs/reference/mt.md</span></pre></div>
+
+<h3>옵션</h3>
+<table>
+  <tr><th>옵션</th><th>기본</th><th>설명</th></tr>
+  <tr><td><code>--task "…"</code></td><td>—</td><td>단일 작업 (없으면 내장 안전작업 3종)</td></tr>
+  <tr><td><code>--tasks-file</code></td><td>—</td><td>작업 목록 파일 (앞 번호 자동 제거)</td></tr>
+  <tr><td><code>--levels</code></td><td><code>minimal,low,medium,high</code></td><td>잴 사고 수준들</td></tr>
+  <tr><td><code>--runs</code></td><td><code>2</code></td><td>작업·수준마다 반복</td></tr>
+  <tr><td><code>--max-turns</code></td><td><code>12</code></td><td>완주 못 하면 이 턴에서 중단(미완 처리)</td></tr>
+  <tr><td><code>--per-turn</code></td><td>off</td><td>턴마다 API지연·토큰·액션·시간을 실시간 출력 (§4)</td></tr>
+  <tr><td><code>--out</code></td><td>—</td><td>결과 마크다운 저장(작업마다 중간 저장)</td></tr>
+  <tr><td><code>--price-in / --price-out</code></td><td>PRICING</td><td>단가 덮어쓰기</td></tr>
+</table>
+<p class="muted">최종 스크린샷은 <code>%TEMP%\cua_multiturn_shots</code>에 <code>t{작업}_{수준}_run{n}.png</code>로 저장 → 실제 성공을 눈으로 검증하는 용도.</p>
+
+<h2 id="perturn">4. 턴별 상세 — <code>--per-turn</code></h2>
+<p>턴마다 <strong>그 호출의 API 지연·토큰</strong>과 <strong>실행한 액션(이름·인자)·실행 시간</strong>을 그때그때 출력합니다.</p>
+<div class="term"><pre><span class="cmd">py tools/bench_multiturn.py --task "설정 앱 열어" --levels low --runs 1 --per-turn</span>
+
+<span class="c">=== 작업 1/1 [low]: 설정 앱 열어 ===</span>
+      턴1: API  10.3s | in=1165 out=28 thought=32 총=1225
+        → list_apps {} [0.13s]
+      턴2: API   7.6s | in=3958 out=34 thought=25 총=4017
+        → open_app {'package_name': 'com.android.settings'} [0.78s]
+      턴3: API   7.3s | in=5107 out=10 thought=16 총=5133
+  run 1: 완주 턴2 액션2 에러0 | API 25.1s / 벽시계 29.8s | tok ... 총=10375 | $0.003432</pre></div>
+<ul>
+  <li><code>턴N: API …s | in/out/thought/총</code> → 그 턴 <strong>모델 호출</strong>의 지연·토큰</li>
+  <li><code>→ open_app {…} [0.78s]</code> → 그 턴이 낸 <strong>액션</strong>과 <strong>ADB 실행 시간</strong></li>
+  <li>입력 토큰이 턴마다 커지는 건 서버가 히스토리를 누적하기 때문(<code>previous_interaction_id</code>).</li>
+</ul>
+
+<h2 id="metrics">5. 지표 읽는 법</h2>
+<table>
+  <tr><th>지표</th><th>뜻</th></tr>
+  <tr><td><strong>API 지연</strong></td><td>완주까지 <em>순수 모델 호출</em> 시간 합 (진짜 latency, 네트워크·재시도 포함)</td></tr>
+  <tr><td><strong>벽시계</strong></td><td>액션 실행 + 화면 안정 대기(<code>SETTLE 0.6s</code>)까지 포함한 <em>작업당 총 시간</em></td></tr>
+  <tr><td><strong>총tok</strong></td><td>완주까지 전 턴의 토큰 합(입력이 턴마다 누적 → 총량이 커짐)</td></tr>
+  <tr><td><strong>사고tok</strong></td><td>모델이 생각에 쓴 토큰. 수준↑이면 증가(비용 동인)</td></tr>
+  <tr><td><strong>완주율</strong></td><td>모델이 max-turns 안에 <em>done을 선언한</em> 비율 (자기 판단)</td></tr>
+</table>
+<div class="warn">
+  <strong>⚠ 완주 선언 ≠ 정답.</strong> 모델이 엉뚱한 화면에서 done을 선언하며 <em>오답</em>을 낼 수 있습니다
+  (실측에서 "장바구니 비었음" 오답 사례 확인). <strong>반드시 최종 스크린샷/답변으로 실제 성공을 검증</strong>하세요.
+</div>
+
+<h2 id="thinklevel">6. 사고 수준(thinking level) 설정</h2>
+<p>값: <code>minimal</code> · <code>low</code> · <code>medium</code> · <code>high</code>. 벤치는 <code>--levels</code>로 지정하고,
+<strong>라이브 에이전트</strong>는 <code>.env</code>의 <code>CU_THINKING_LEVEL</code>로 전체에 적용됩니다.</p>
+<div class="term"><pre><span class="c"># .env</span>
+CU_THINKING_LEVEL=low   <span class="c"># 비우면 모델 기본</span></pre></div>
+<p class="muted">실측 요약: 평이한 작업은 <code>low</code>가 무난(턴·비용 최소, 헤맴 없음). 자세한 근거는 아래 결과 문서 참고.</p>
+
+<h2 id="tips">7. 팁 &amp; 주의</h2>
+<ul>
+  <li>이 세션에서 바로 돌리려면 프롬프트 맨 앞에 <span class="kbd">!</span>를 붙이면 됩니다:
+    <code>!py tools/bench_thinking.py --levels minimal,high --runs 2</code></li>
+  <li>비용 <code>$</code>의 <strong>단가는 placeholder</strong>입니다(<code>PRICING</code>). 토큰량은 실측이니
+    <a href="https://ai.google.dev/pricing">공식 가격표</a>로 단가만 갱신하면 정확해집니다.</li>
+  <li>기기 없이 토큰·지연만 볼 땐 <code>bench_thinking.py --image</code>를 쓰세요(입력 토큰은 화면이 달라도 ~1170으로 거의 일정).</li>
+  <li>완주 벤치는 오래 걸리므로 여러 작업이면 백그라운드로 돌리는 게 편합니다. 재시도·중간저장이 내장돼 슬립/끊김에 강합니다.</li>
+  <li>노트/파일을 만드는 작업은 반복 실행 시 <strong>결과물이 누적</strong>됩니다(사후 정리 필요).</li>
+</ul>
+
+<h2 id="results">8. 측정 결과 문서 (docs/reference/)</h2>
+<ul>
+  <li><code>thinking-level.md</code> — 사고 수준 개념·API·종합 결론</li>
+  <li><code>thinking-bench-2026-07-15.md</code> — 첫 판단 벤치 결과</li>
+  <li><code>multiturn-*-2026-07-15.md</code> — 완주 벤치 결과(설정/날씨·유튜브/노트/판단작업)</li>
+  <li><code>gemini-computer-use.md</code> — CU 모델·API 스펙 참고</li>
+</ul>
+
+<footer>
+  CUA_run · 생성 2026-07-15 · 이 파일은 <code>docs/USAGE.html</code>로 git 추적됩니다.
+</footer>
+
+</div>
+</body>
+</html>
