@@ -148,6 +148,12 @@ def run_task(client, bridge, task, level, max_turns, tag, per_turn=False) -> dic
                     errors += 1
             act_dt = time.perf_counter() - a0   # 액션(ADB 실행) 소요 시간
             if per_turn:
+                intent = action.args.get("intent")
+                if intent:
+                    it = str(intent).replace("\n", " ")
+                    if len(it) > 100:
+                        it = it[:100] + "…"
+                    print(f"        의도: {it}", flush=True)
                 shown = {k: v for k, v in action.args.items()
                          if k not in ("intent", "safety_decision")}
                 s = str(shown)
