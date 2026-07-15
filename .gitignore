@@ -18,6 +18,9 @@ env/
 screen.png
 *.png
 
+# ── git 변경 리포트(생성물) ──
+git_report.html
+
 # ── 로컬 IDE/도구 설정 ──
 .claude/settings.local.json
 .vscode/
