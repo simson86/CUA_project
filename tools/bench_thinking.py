@@ -87,13 +87,35 @@ def cost_usd(tok: dict, price_in: float, price_out: float) -> float:
     return (tok["input"] * price_in + billed_out * price_out) / 1_000_000
 
 
+def create_with_retry(client, task, shot, level, retries=5):
+    """연결 끊김(슬립/네트워크 블립)에 견디게 지수백오프 재시도.
+
+    노트북을 덮으면 진행 중 소켓이 리셋(WinError 10054)돼 호출이 죽는다.
+    깨어난 뒤 재시도하면 이어진다. API 4xx 같은 논리 오류는 즉시 올린다.
+    """
+    delay = 2.0
+    for attempt in range(retries + 1):
+        try:
+            return client.create(initial_input(task, shot), thinking_level=level)
+        except Exception as e:
+            name = type(e).__name__
+            transient = any(k in name for k in ("Connection", "ReadError",
+                            "Timeout", "Remote")) or "10054" in str(e)
+            if attempt >= retries or not transient:
+                raise
+            print(f"    (연결 오류 {name} → {delay:.0f}s 후 재시도 "
+                  f"{attempt+1}/{retries})", flush=True)
+            time.sleep(delay)
+            delay = min(delay * 2, 30)
+
+
 def measure(client: CUClient, task: str, shot: bytes, level: str, runs: int,
             price_in: float, price_out: float) -> dict:
     lats, toks, costs = [], [], []
     for i in range(runs):
         t0 = time.perf_counter()
         # 매번 새 판단(previous_interaction_id 없음)이라 수준 비교가 공정하다.
-        interaction = client.create(initial_input(task, shot), thinking_level=level)
+        interaction = create_with_retry(client, task, shot, level)
         lats.append(time.perf_counter() - t0)
         tk = usage_tokens(interaction)
         toks.append(tk)
