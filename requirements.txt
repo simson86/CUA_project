@@ -1,4 +1,4 @@
 # 설치: py -m pip install -r requirements.txt
 # (⚠ python 말고 py — PATH의 python은 msys2라 pip이 없음)
-google-genai==2.10.0
+google-genai==2.11.0
 python-dotenv==1.2.2
