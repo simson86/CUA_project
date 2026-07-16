@@ -116,3 +116,5 @@ class CUClient:
         """편의 함수: 목표(+히스토리)+스크린샷으로 바로 1회 호출. [5단계] history 추가"""
         return self.create(initial_input(goal, screenshot, history),
                            previous_interaction_id, thinking_level)
+
+#test1 추가
