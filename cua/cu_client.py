@@ -71,23 +71,37 @@ def function_result(name: str, call_id: str, screenshot: Any,
     }
 
 
-# 사고 수준(thinking level): 판단 전 추론량 ↔ 속도/비용 트레이드오프.
-# 값은 소문자 "minimal"|"low"|"medium"|"high" (Interactions API 규격).
-# 문서 권장: 표준 자동화는 낮은 수준이 균형이 좋다. 측정은 tools/bench_thinking.py.
-THINKING_LEVELS = ("minimal", "low", "medium", "high")
+def _build_generation_config(thinking_level: Optional[str],
+                             temperature: Optional[float]) -> Optional[dict]:
+    """[reasoning 배선] 이 호출에 적용할 thinking_level·temperature → generation_config.
+
+    thinking_level: 'MINIMAL'/'LOW'/'MEDIUM'/'HIGH' (Gemini 네이티브, 대소문자 무관) 또는 None.
+    ⚠️ SDK 규격: thinking_level 은 반드시 thinking_config 안에 중첩. 평면으로 넣으면
+       google-genai 2.10/2.11 모두 ValidationError(extra_forbidden)로 죽는다(검증됨).
+    둘 다 None(미지정)이면 None 반환 → 지금까지와 동일(모델 기본값). 라이브·평가 공유.
+    """
+    cfg: dict = {}
+    if thinking_level:
+        cfg["thinking_config"] = {"thinking_level": thinking_level}
+    if temperature is not None:
+        cfg["temperature"] = temperature
+    return cfg or None
 
 
 class CUClient:
     """Computer Use 호출기."""
 
     def __init__(self, api_key: Optional[str] = None, model: str = MODEL,
-                 thinking_level: Optional[str] = None):
+                 thinking_level: Optional[str] = None,
+                 temperature: Optional[float] = None):
+        # [reasoning 배선] thinking_level·temperature 는 안 넘기면 None → 기본 동작 그대로.
         self.client = genai.Client(api_key=api_key or os.getenv("GEMINI_API_KEY"))
         self.model = model
-        # 기본 사고 수준: 인자 > .env(CU_THINKING_LEVEL) > 미지정(모델 기본).
-        self.thinking_level = (thinking_level or os.getenv("CU_THINKING_LEVEL") or None)
-        if self.thinking_level:
-            self.thinking_level = self.thinking_level.lower()
+        # 기본 사고수준: 인자 > .env(CU_THINKING_LEVEL) > 미지정(모델 기본).
+        #   - 벤치마크(cu_agent)는 항상 인자를 명시 → .env 안 탐 → 재현성 보존.
+        #   - 라이브에서 --thinking 생략 시에만 .env 가 기본값으로 작동.
+        self.thinking_level = thinking_level or os.getenv("CU_THINKING_LEVEL") or None
+        self.temperature = temperature
 
     def create(self, input: List[dict], previous_interaction_id: Optional[str] = None,
                thinking_level: Optional[str] = None):
@@ -97,16 +111,17 @@ class CUClient:
         벤치마크(오프라인)는 스텝당 initial_input 으로 1회만 부르면 된다.
         thinking_level 을 주면 이번 호출만 그 수준으로(측정용). 없으면 인스턴스 기본값.
         """
-        kwargs = dict(
+        level = thinking_level or self.thinking_level  # per-call > 인스턴스 기본
+        kwargs: dict = dict(
             model=self.model,
             system_instruction=SYSTEM_PROMPT,
             input=input,
             tools=TOOLS,
             previous_interaction_id=previous_interaction_id,
         )
-        level = (thinking_level or self.thinking_level)
-        if level:
-            kwargs["generation_config"] = {"thinking_level": level.lower()}
+        gen_cfg = _build_generation_config(level, self.temperature)
+        if gen_cfg is not None:  # thinking·temperature 둘 다 없으면 기존과 완전히 동일
+            kwargs["generation_config"] = gen_cfg
         return self.client.interactions.create(**kwargs)
 
     def decide(self, goal: str, screenshot: Any,
@@ -116,5 +131,3 @@ class CUClient:
         """편의 함수: 목표(+히스토리)+스크린샷으로 바로 1회 호출. [5단계] history 추가"""
         return self.create(initial_input(goal, screenshot, history),
                            previous_interaction_id, thinking_level)
-
-#test1 추가
