@@ -11,6 +11,7 @@
 import os
 import sys
 import time
+from typing import Optional
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -22,7 +23,7 @@ except Exception:
     pass
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(_REPO_ROOT, ".env"))
+load_dotenv(os.path.join(_REPO_ROOT, ".env")) #.env에서 GEMINI_API_KEY 로드
 
 from cua import (
     CUClient, initial_input, function_result, parse_actions, is_done, final_text,
@@ -31,9 +32,14 @@ from live.adb_bridge import ADBBridge
 
 SETTLE_SEC = 0.6  # 액션 후 화면이 안정될 때까지 대기
 
+# [reasoning] CLI thinking('none'/'low'/'medium'/'high') → CU 네이티브 레벨
+_THINKING_MAP = {"none": "MINIMAL", "low": "LOW", "medium": "MEDIUM", "high": "HIGH"}
 
-def run(task: str, max_turns: int = 30):
-    client = CUClient()
+
+def run(task: str, max_turns: int = 30, thinking: Optional[str] = None):
+    # [reasoning] thinking('none'→MINIMAL 등)을 CU에 전달. 안 주면 기본값(미설정→.env).
+    thinking_level = _THINKING_MAP.get(thinking) if thinking else None
+    client = CUClient(thinking_level=thinking_level)
     bridge = ADBBridge()
     bridge.ensure_adb_keyboard()   # 한글 입력용 ADBKeyboard 확인·설치·IME 전환(원래 IME 저장)
     print(f"기기 해상도: {bridge.width}x{bridge.height}")
@@ -87,5 +93,11 @@ def run(task: str, max_turns: int = 30):
 
 
 if __name__ == "__main__":
-    task_desc = " ".join(sys.argv[1:]) or "Open the Settings app"
-    run(task_desc)
+    import argparse
+    parser = argparse.ArgumentParser(description="라이브 CU 에이전트")
+    parser.add_argument("task", nargs="*", help='작업 설명 (예: "설정 앱 열어")')
+    parser.add_argument("--thinking", choices=["none", "low", "medium", "high"],
+                        default=None, help="[reasoning] CU 추론 레벨 (none=MINIMAL). 미지정=기본값")
+    args = parser.parse_args()
+    task_desc = " ".join(args.task) or "Open the Settings app"
+    run(task_desc, thinking=args.thinking)
