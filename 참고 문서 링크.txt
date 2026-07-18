@@ -2,3 +2,9 @@ https://blog.google/innovation-and-ai/models-and-research/google-deepmind/gemini
 https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-computer-use-gemini-3-5-flash/
 https://ai.google.dev/gemini-api/docs/computer-use?hl=ko#safety-security
 https://github.com/google-gemini/gemini-android-computer-use-quickstart/tree/main
+
+https://www.google.com/intl/ko/accessibility/for-developers/?_gl=1*1a1ln19*_up*MQ..*_ga*OTE4NjgxMTU4LjE3ODQzNjAzMzc.*_ga_QT09DF8ZHR*czE3ODQzNjAzMzckbzEkZzAkdDE3ODQzNjAzMzckajYwJGwwJGgw
+https://developer.android.com/guide/topics/ui/accessibility/apps?hl=ko
+https://developer.android.com/guide/topics/ui/accessibility/principles?hl=ko
+https://developer.android.com/guide/topics/ui/accessibility/testing?hl=ko
+https://developer.android.com/guide/topics/ui/accessibility/additional-resources?hl=ko
