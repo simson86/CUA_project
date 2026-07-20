@@ -20,10 +20,18 @@ screen.png
 
 # ── git 변경 리포트(생성물) ──
 git_report.html
+git_report*.html
+
+# ── 로컬 임시 테스트 스크립트(공유 안 함) ──
+/test_connect.py
+/testscreen.py
 
 # ── 벤치 결과·산출물(로컬 전용, 커밋 안 함) ──
 예약_*.txt
 *.pptx
+
+# ── 로컬 전용 문서(깃 공유 안 함) ──
+docs/reference/hybrid-step*.md
 
 # ── 로컬 IDE/도구 설정 ──
 .claude/settings.local.json

@@ -28,7 +28,7 @@ load_dotenv(os.path.join(_REPO_ROOT, ".env")) #.env에서 GEMINI_API_KEY 로드
 from cua import (
     CUClient, initial_input, function_result, parse_actions, is_done, final_text,
 )
-from live.adb_bridge import ADBBridge
+from a11service_bridge import A11yBridge
 
 SETTLE_SEC = 0.6  # 액션 후 화면이 안정될 때까지 대기
 
@@ -40,7 +40,10 @@ def run(task: str, max_turns: int = 30, thinking: Optional[str] = None):
     # [reasoning] thinking('none'→MINIMAL 등)을 CU에 전달. 안 주면 기본값(미설정→.env).
     thinking_level = _THINKING_MAP.get(thinking) if thinking else None
     client = CUClient(thinking_level=thinking_level)
-    bridge = ADBBridge()
+    phone_ip = os.environ.get("PHONE_IP")
+    if not phone_ip:
+        raise SystemExit('PHONE_IP 미설정. 예 : $env:PHONE_IP="192.168.0.55"; py live/main.py "작업"')
+    bridge= A11yBridge(phone_ip)
     bridge.ensure_adb_keyboard()   # 한글 입력용 ADBKeyboard 확인·설치·IME 전환(원래 IME 저장)
     print(f"기기 해상도: {bridge.width}x{bridge.height}")
     print(f"작업: {task}")
