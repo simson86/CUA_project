@@ -5,7 +5,6 @@
 사용:
   py tools/send.py "설정 앱을 열어"          # RUN: 폰이 목표를 자율 수행(캡처→Gemini→제스처 반복)
   py tools/send.py --shot                     # 현재 폰 화면을 after.png 로 저장
-  py tools/send.py --cu "설정 앱을 열어"      # CU: 판단 1회만(실행 안 함, 디버그)
   py tools/send.py "쿠팡 슬리퍼 검색" --ip 192.168.0.99 --timeout 240
 
 기본 IP=192.168.0.51 (DHCP라 바뀌면 --ip 로 지정). 파이썬은 반드시 py 로 실행.
@@ -73,11 +72,11 @@ def do_shot(ip: str, timeout: float, out: str):
     print(f"[SHOT] {n} bytes → {out}")
 
 
-def do_send(ip: str, timeout: float, cmd: str, task: str):
-    """cmd = 'RUN' 또는 'CU'. task 문자열과 합쳐 소켓으로 전송."""
+def do_run(ip: str, timeout: float, task: str):
+    """RUN <task> 를 소켓으로 전송 → 폰이 목표를 자율 수행하고 결과 반환."""
     s = _connect(ip, timeout)
-    s.sendall(f"{cmd} {task}\n".encode("utf-8"))
-    print(f"[{cmd}] 전송: {task}  (폰이 처리 중... 최대 {timeout:.0f}s 대기)")
+    s.sendall(f"RUN {task}\n".encode("utf-8"))
+    print(f"[RUN] 전송: {task}  (폰이 처리 중... 최대 {timeout:.0f}s 대기)")
     try:
         print("[결과]", _recv_line(s))
     except socket.timeout:
@@ -95,7 +94,6 @@ def main():
     ap.add_argument("--timeout", type=float, default=180.0, help="응답 대기 초 (기본 180)")
     ap.add_argument("--shot", action="store_true", help="현재 폰 화면만 캡처(after.png)")
     ap.add_argument("--out", default="after.png", help="--shot 저장 경로")
-    ap.add_argument("--cu", action="store_true", help="RUN 대신 CU(판단 1회만, 실행 안 함)")
     args = ap.parse_args()
 
     if args.shot:
@@ -106,7 +104,7 @@ def main():
     if not task:
         raise SystemExit('목표를 주세요. 예: py tools/send.py "설정 앱을 열어"  (또는 --shot)')
 
-    do_send(args.ip, args.timeout, "CU" if args.cu else "RUN", task)
+    do_run(args.ip, args.timeout, task)
 
 
 if __name__ == "__main__":
