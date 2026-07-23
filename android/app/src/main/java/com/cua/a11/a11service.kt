@@ -27,7 +27,47 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-class a11service : AccessibilityService() {
+class a11service : AccessibilityService(), Executor {
+    private val cu by lazy { CuClient(BuildConfig.GEMINI_API_KEY) }
+    private var lastW = 0
+    private var lastH = 0
+
+    override fun screenshot(): ByteArray {
+        val png = capturePngBlocking()
+        val (w, h) = pngSize(png); lastW = w; lastH = h
+        return png
+    }
+    override fun dispatch(name: String, args: JSONObject): JSONObject? {
+        val w = lastW; val h = lastH
+        when (name) {
+            "click" -> tapBlocking(pxX(args.getInt("x"), w).toFloat(), pxY(args.getInt("y"), h).toFloat())
+            "long_press" -> {
+                val x = pxX(args.getInt("x"), w).toFloat(); val y = pxY(args.getInt("y"), h).toFloat()
+                swipeBlocking(x, y, x, y, (args.optDouble("seconds", 2.0) * 1000).toLong())
+            }
+            "drag_and_drop" -> swipeBlocking(
+                pxX(args.getInt("start_x"), w).toFloat(), pxY(args.getInt("start_y"), h).toFloat(),
+                pxX(args.getInt("end_x"), w).toFloat(),   pxY(args.getInt("end_y"), h).toFloat(), 300)
+            "type" -> { setText(args.getString("text")); if (args.optBoolean("press_enter", false)) imeEnter() }
+            "press_key" -> when (args.optString("key").lowercase()) {
+                "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
+                "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
+                "enter" -> imeEnter()
+                "app_switch" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+            }
+            "go_back" -> performGlobalAction(GLOBAL_ACTION_BACK)
+            "open_app" -> {
+                val pkg = args.optString("package_name").ifEmpty { args.optString("app_name") }
+                if (pkg.isNotEmpty()) openApp(pkg) else performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+            "wait" -> Thread.sleep((args.optDouble("seconds", 1.0) * 1000).toLong())
+            "take_screenshot" -> { /* 다음 스냅샷이 곧 결과 */ }
+            "list_apps" -> return JSONObject().put("apps",
+                JSONArray(packageManager.getInstalledPackages(0).map { it.packageName }))
+            else -> throw IllegalArgumentException("Unknown action: $name")
+        }
+        return null
+    }
     override fun onServiceConnected() {
         Log.d("A11y", "connected")
         startServer()
@@ -79,6 +119,13 @@ class a11service : AccessibilityService() {
                             val out = (result + "\n").toByteArray()
                             client.getOutputStream().apply { write(out); flush() }
                         }
+                        "RUN" -> {
+                            val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
+                            val result = runAgent(this, cu, task)          // this = a11service = Executor
+                            client.getOutputStream().apply {
+                                write((result + "\n").toByteArray()); flush()
+                            }
+                        }
                         else        -> { Log.e("A11y", "unknown cmd: $line"); ackOK(client) }
                     }
                 } catch (e: Exception) {
@@ -88,6 +135,35 @@ class a11service : AccessibilityService() {
                 }
             }
         }
+    }
+    private fun pxX(norm: Int, w:Int) = (norm / 1000.0 * w).toInt()
+    private fun pxY(norm: Int, h:Int) = (norm / 1000.0 * h).toInt()
+
+    private fun pngSize(png: ByteArray): Pair<Int, Int> {
+        fun be(o: Int) = ((png[o].toInt() and 0xFF) shl 24) or ((png[o+1].toInt() and 0xFF) shl 16) or
+                ((png[o+2].toInt() and 0xFF) shl 8) or (png[o+3].toInt() and 0xFF)
+        return Pair(be(16), be(20))
+    }
+    private fun imageBlock(png: ByteArray) = JSONObject()
+        .put("type", "image")
+        .put("data", Base64.encodeToString(png, Base64.NO_WRAP))
+        .put("mime_type", "image/png")
+    //목표 + 화면
+    private fun userInput(task: String, png: ByteArray): JSONArray {
+        val content = JSONArray()
+            .put(JSONObject().put("type", "text").put("text", "Task: $task"))
+            .put(imageBlock(png))
+        return JSONArray().put(JSONObject().put("type", "user_input").put("content", content))
+    }
+    private fun functionResult(name: String, callId: String, png: ByteArray, safetyAck: Boolean): JSONObject {
+        val status = JSONObject().put("status", "ok")
+        if (safetyAck) status.put("safety_acknowledgement", true)
+        val result = JSONArray()
+            .put(JSONObject().put("type", "text").put("text", status.toString()))
+            .put(imageBlock(png))
+        return JSONObject()
+            .put("type", "function_result")
+            .put("name", name).put("call_id", callId).put("result", result)
     }
 
     private val http = OkHttpClient.Builder()

@@ -31,7 +31,7 @@ git_report*.html
 *.pptx
 
 # ── 로컬 전용 문서(깃 공유 안 함) ──
-docs/reference/hybrid-step*.md
+docs/reference/hybrid-*.md
 
 # ── 로컬 IDE/도구 설정 ──
 .claude/settings.local.json
