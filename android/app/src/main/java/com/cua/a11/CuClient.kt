@@ -131,7 +131,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20):Str
             val name = c.optString("name")
             val callId = c.optString("id")
             val args = c.optJSONObject("arguments") ?: JSONObject()
-            android.util.Log.i("a11cu", "[턴 $turn] $name $args")
+            android.util.Log.i("a11cu", "[턴 $turn] $name {${fmtArgs(args)}}")
             val status = JSONObject().put("status","ok")
             try {
                 val extra = exec.dispatch(name,args)
@@ -151,3 +151,12 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20):Str
     android.util.Log.i("a11cu", "[중단] 최대 턴 도달")
     return "STOP: max turns"
 }
+
+private fun fmtArgs(o: JSONObject): String {
+    val order = listOf("x", "y", "start_x", "start_y", "end_x", "end_y",
+        "text", "press_enter", "key", "package_name", "app_name", "seconds")
+    val known = order.filter { o.has(it) }
+    val rest = o.keys().asSequence().filter { it !in order }.sorted().toList()
+    return (known + rest).joinToString(", ") { "$it=${o.get(it)}" }
+}
+

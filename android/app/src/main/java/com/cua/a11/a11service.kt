@@ -9,7 +9,6 @@ import java.io.ByteArrayOutputStream
 import java.net.ServerSocket
 import kotlin.concurrent.thread
 import android.accessibilityservice.GestureDescription
-import android.accessibilityservice.AccessibilityService.GestureResultCallback
 import android.graphics.Path
 import android.view.accessibility.AccessibilityNodeInfo
 import android.os.Bundle
@@ -17,17 +16,26 @@ import android.util.Base64
 import android.content.Intent
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
-import android.accessibilityservice.AccessibilityService.ScreenshotResult
-import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
+
 
 class a11service : AccessibilityService(), Executor {
+    companion object{
+        @Volatile
+        var instance : a11service? = null
+            private set
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean{
+        instance = null
+        return super.onUnbind(intent)
+    }
+    override fun onDestroy(){
+        instance = null
+        super.onDestroy()
+    }
+    fun runTask(task:String) : String = runAgent(this,cu,task)
     private val cu by lazy { CuClient(BuildConfig.GEMINI_API_KEY) }
     private var lastW = 0
     private var lastH = 0
@@ -70,6 +78,7 @@ class a11service : AccessibilityService(), Executor {
     }
     override fun onServiceConnected() {
         Log.d("A11y", "connected")
+        instance = this
         startServer()
     }
 
@@ -109,16 +118,6 @@ class a11service : AccessibilityService(), Executor {
                         "HOME"      -> { performGlobalAction(GLOBAL_ACTION_HOME); ackOK(client) }
                         "RECENTS"   -> { performGlobalAction(GLOBAL_ACTION_RECENTS); ackOK(client) }
                         "OPEN"      -> { openApp(p[1]); ackOK(client) }
-                        "CU" -> {
-                            // p 형식: "CU 설정 앱을 열어"  (명령 뒤 나머지를 목표로)
-                            val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
-                            val png = capturePngBlocking()          // 2단계에서 만든 캡처 함수 재사용
-                            val result = callGeminiOnce(png, task)   // ← 폰이 직접 Gemini 호출
-                            android.util.Log.i("a11cu", result)      // logcat 에서도 확인
-                            // 결과 문자열을 그대로 PC로 돌려줌(길이4 + 본문 형태로 보내도 되고, 간단히 줄바꿈 텍스트로)
-                            val out = (result + "\n").toByteArray()
-                            client.getOutputStream().apply { write(out); flush() }
-                        }
                         "RUN" -> {
                             val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
                             val result = runAgent(this, cu, task)          // this = a11service = Executor
@@ -143,100 +142,6 @@ class a11service : AccessibilityService(), Executor {
         fun be(o: Int) = ((png[o].toInt() and 0xFF) shl 24) or ((png[o+1].toInt() and 0xFF) shl 16) or
                 ((png[o+2].toInt() and 0xFF) shl 8) or (png[o+3].toInt() and 0xFF)
         return Pair(be(16), be(20))
-    }
-    private fun imageBlock(png: ByteArray) = JSONObject()
-        .put("type", "image")
-        .put("data", Base64.encodeToString(png, Base64.NO_WRAP))
-        .put("mime_type", "image/png")
-    //목표 + 화면
-    private fun userInput(task: String, png: ByteArray): JSONArray {
-        val content = JSONArray()
-            .put(JSONObject().put("type", "text").put("text", "Task: $task"))
-            .put(imageBlock(png))
-        return JSONArray().put(JSONObject().put("type", "user_input").put("content", content))
-    }
-    private fun functionResult(name: String, callId: String, png: ByteArray, safetyAck: Boolean): JSONObject {
-        val status = JSONObject().put("status", "ok")
-        if (safetyAck) status.put("safety_acknowledgement", true)
-        val result = JSONArray()
-            .put(JSONObject().put("type", "text").put("text", status.toString()))
-            .put(imageBlock(png))
-        return JSONObject()
-            .put("type", "function_result")
-            .put("name", name).put("call_id", callId).put("result", result)
-    }
-
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
-
-    private val CU_SYSTEM = """
-    You are operating an Android phone.
-    * Use the provided tools to complete the task.
-    * Scroll down to inspect the full screen before assuming an element is missing.
-    * You can open apps by package name from anywhere.
-    * Type text only using the `type` tool. Do not use the virtual keyboard.
-    * If the task is already complete, state that directly.
-    """.trimIndent()
-    /**
-     * 스크린샷(PNG bytes)과 목표를 Gemini CU에 1회 보내고,
-     * 돌아온 첫 액션을 "name {args}" 문자열로 만들어 반환한다.
-     * 네트워크 호출이라 반드시 백그라운드 스레드에서 부를 것(소켓 서버 스레드는 이미 백그라운드).
-     * 5단계는 여기까지 = 로그 확인. 실제 실행/멀티턴은 6단계.
-     */
-    private fun callGeminiOnce(png: ByteArray, task: String): String {
-        // 1) 이미지 → base64 (NO_WRAP: 줄바꿈 없이 한 줄)
-        val b64 = Base64.encodeToString(png, Base64.NO_WRAP)
-
-        // 2) 요청 바디 JSON 조립 (§1 계약 그대로)
-        val textBlock = JSONObject()
-            .put("type", "text")
-            .put("text", "Task: $task")
-        val imageBlock = JSONObject()
-            .put("type", "image")
-            .put("data", b64)
-            .put("mime_type", "image/png")
-        val userInput = JSONObject()
-            .put("type", "user_input")
-            .put("content", JSONArray().put(textBlock).put(imageBlock))
-        val tool = JSONObject()
-            .put("type", "computer_use")
-            .put("environment", "mobile")
-        val body = JSONObject()
-            .put("model", "gemini-3.5-flash")
-            .put("input", JSONArray().put(userInput))
-            .put("system_instruction", CU_SYSTEM)
-            .put("tools", JSONArray().put(tool))
-
-        // 3) POST
-        val req = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/interactions")
-            .addHeader("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
-            .addHeader("Content-Type", "application/json")
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-
-        http.newCall(req).execute().use { resp ->
-            val txt = resp.body?.string() ?: ""
-            if (!resp.isSuccessful) {
-                return "HTTP ${resp.code}: ${txt.take(300)}"   // 키 오류·쿼터 등 그대로 보이게
-            }
-            // 4) 응답 파싱 → 첫 function_call
-            val obj = JSONObject(txt)
-            val id = obj.optString("id")
-            val status = obj.optString("status")
-            val steps = obj.optJSONArray("steps") ?: JSONArray()
-            for (i in 0 until steps.length()) {
-                val s = steps.getJSONObject(i)
-                if (s.optString("type") == "function_call") {
-                    val name = s.optString("name")
-                    val args = s.optJSONObject("arguments")?.toString() ?: "{}"
-                    return "id=$id status=$status action=$name args=$args"
-                }
-            }
-            return "id=$id status=$status (function_call 없음 = 완료로 판단)"
-        }
     }
 
     // takeScreenshot은 결과를 '콜백'으로 준다(비동기). 서버 스레드는 결과를 손에 쥐어야
