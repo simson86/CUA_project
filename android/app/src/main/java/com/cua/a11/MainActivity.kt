@@ -3,11 +3,17 @@ package com.cua.a11
 import android.os.Bundle
 import android.content.Intent
 import android.provider.Settings
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import kotlin.concurrent.thread
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -17,6 +23,19 @@ class MainActivity : AppCompatActivity() {
         val input = findViewById<EditText>(R.id.taskInput)
         val runBtn = findViewById<Button>(R.id.runBtn)
         val result = findViewById<TextView>(R.id.resultView)
+        val logView   = findViewById<TextView>(R.id.logView)
+        val logScroll = findViewById<ScrollView>(R.id.logScroll)
+        val histBtn   = findViewById<Button>(R.id.histBtn)
+        val clearBtn  = findViewById<Button>(R.id.clearBtn)
+
+        histBtn.setOnClickListener {
+            logView.text = loadHistory()
+            logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+        }
+        clearBtn.setOnClickListener {
+            logFile().delete()
+            logView.text = "(로그 지움)"
+        }
 
         runBtn.setOnClickListener {
             val task= input.text.toString().trim()
@@ -33,18 +52,40 @@ class MainActivity : AppCompatActivity() {
 
             }
             runBtn.isEnabled = false
-            result.text = "실행중... ($task)"
-            thread{
-                val r = try{
-                    svc.runTask(task)
-                }catch(e: Exception){
+            logView.text = ""
+            result.text = "실행 중… ($task)"
+            thread {
+                val runLog = StringBuilder()               // ← 이번 실행 로그 누적
+                val r = try {
+                    svc.runTask(task) { line ->
+                        runLog.append(line).append("\n")   // 파일용(백그라운드)
+                        runOnUiThread {                    // 화면용
+                            logView.append(line + "\n")
+                            logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+                        }
+                    }
+                } catch (e: Exception) {
                     "오류: ${e.message}"
                 }
+                runLog.append(r).append("\n")
+                saveLog(task, runLog.toString())           // ← 끝나면 파일 저장(백그라운드)
                 runOnUiThread {
                     result.text = r
                     runBtn.isEnabled = true
                 }
             }
         }
+    }
+    private fun logFile() = File(filesDir, "run_history.txt")
+
+    /** 한 실행 로그를 타임스탬프+목표 헤더와 함께 파일 끝에 append. */
+    private fun saveLog(task: String, body: String) {
+        val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        logFile().appendText("===== $ts  |  $task =====\n$body\n\n")  // appendText=UTF-8
+    }
+
+    private fun loadHistory(): String {
+        val f = logFile()
+        return if (f.exists()) f.readText() else "(저장된 로그 없음)"
     }
 }

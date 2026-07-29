@@ -35,7 +35,7 @@ class a11service : AccessibilityService(), Executor {
         instance = null
         super.onDestroy()
     }
-    fun runTask(task:String) : String = runAgent(this,cu,task)
+    fun runTask(task:String,log:(String) -> Unit = {}) : String = runAgent(this,cu,task,log=log)
     private val cu by lazy { CuClient(BuildConfig.GEMINI_API_KEY) }
     private var lastW = 0
     private var lastH = 0
