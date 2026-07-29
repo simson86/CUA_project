@@ -2,6 +2,7 @@ package com.cua.a11
 
 import android.os.Bundle
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import android.view.View
 import android.widget.Button
@@ -14,12 +15,19 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         val input = findViewById<EditText>(R.id.taskInput)
         val runBtn = findViewById<Button>(R.id.runBtn)
         val result = findViewById<TextView>(R.id.resultView)
@@ -50,6 +58,13 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 return@setOnClickListener
 
+            }
+            if (!Settings.canDrawOverlays(this)) {
+                // '다른 앱 위에 표시' 권한 없으면 안내 + 설정화면으로
+                result.text = "‘다른 앱 위에 표시’ 권한이 필요합니다.\n설정에서 켠 뒤 다시 실행하세요."
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")))
+                return@setOnClickListener
             }
             runBtn.isEnabled = false
             logView.text = ""
@@ -88,4 +103,8 @@ class MainActivity : AppCompatActivity() {
         val f = logFile()
         return if (f.exists()) f.readText() else "(저장된 로그 없음)"
     }
+
+    private val notifPerm =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 결과 무시 */ }
+
 }
