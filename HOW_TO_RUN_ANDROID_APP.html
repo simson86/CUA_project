@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Android_run 앱 실행 가이드 (폰 단독 온디바이스 CU)</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --fg:#1c2128; --muted:#5b6470; --card:#ffffff; --line:#e3e7ec;
+    --accent:#2563eb; --accent-soft:#eaf1ff; --warn-bg:#fff4e5; --warn-line:#f0b072;
+    --danger-bg:#fdecec; --danger-line:#e88; --code:#0f172a; --code-fg:#e2e8f0;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0d1117; --fg:#e6edf3; --muted:#9aa4b2; --card:#161b22; --line:#2a313a;
+      --accent:#6ea8fe; --accent-soft:#16233d; --warn-bg:#2b2213; --warn-line:#7a5b23;
+      --danger-bg:#2c1618; --danger-line:#7d3a3a; --code:#0b1020; --code-fg:#e2e8f0;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+    line-height:1.7;font-size:16px}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 20px 80px}
+  header{border-bottom:2px solid var(--line);padding-bottom:20px;margin-bottom:8px}
+  h1{font-size:1.8rem;margin:0 0 6px}
+  .sub{color:var(--muted);margin:0}
+  h2{font-size:1.3rem;margin:36px 0 12px;padding-top:8px}
+  h3{font-size:1.05rem;margin:22px 0 8px}
+  p,li{color:var(--fg)}
+  code{background:var(--accent-soft);color:var(--accent);padding:2px 6px;border-radius:5px;
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:.9em}
+  pre{background:var(--code);color:var(--code-fg);padding:14px 16px;border-radius:10px;overflow-x:auto;
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:.86rem;line-height:1.5}
+  pre code{background:none;color:inherit;padding:0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .step{display:flex;gap:14px;align-items:flex-start;margin:16px 0}
+  .num{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.95rem}
+  .step-body{flex:1;min-width:0}
+  .step-body h3{margin-top:2px}
+  .callout{border-radius:10px;padding:12px 16px;margin:14px 0;border:1px solid}
+  .warn{background:var(--warn-bg);border-color:var(--warn-line)}
+  .danger{background:var(--danger-bg);border-color:var(--danger-line)}
+  .tag{display:inline-block;background:var(--accent-soft);color:var(--accent);
+    border-radius:999px;padding:1px 10px;font-size:.8rem;font-weight:600;margin-left:6px}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft)}
+  ul{padding-left:20px}
+  .kbd{background:var(--card);border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;
+    padding:1px 7px;font-size:.85em;font-weight:600}
+  footer{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Android_run 앱 실행 가이드</h1>
+  <p class="sub">폰 단독 온디바이스 Computer Use — 케이블·PC 없이 폰 안에서 Gemini가 화면을 보고 스스로 조작</p>
+</header>
+
+<div class="card">
+  <strong>이 앱이 하는 일</strong><br>
+  앱에 목표(예: <code>설정 앱을 열어</code>)를 입력하면, 폰이 <b>화면 캡처 → Gemini에 판단 요청 → 받은 UI 액션(탭/입력/스크롤)을 접근성으로 실행</b>하는 루프를 완료까지 반복합니다. PC도, USB 케이블도 필요 없습니다(디버깅용으로만 선택).
+</div>
+
+<h2>0. 준비물</h2>
+<ul>
+  <li><b>Android Studio</b> (최신 안정판 권장)</li>
+  <li><b>안드로이드 실기기</b> — <b>Android 11(API 30) 이상</b>. 접근성 화면캡처가 API 30+에서만 동작. (에뮬레이터도 되지만 실기기 권장)</li>
+  <li><b>본인 Gemini API 키</b> — <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a> 에서 발급. <b>각자 자기 키를 씁니다.</b></li>
+  <li>설치할 때만 USB 케이블 1회(또는 무선 디버깅). 이후엔 폰 단독.</li>
+</ul>
+
+<h2>1. 코드 받기</h2>
+<div class="step">
+  <div class="num">1</div>
+  <div class="step-body">
+    <h3>저장소 클론</h3>
+    <pre><code>git clone https://github.com/simson86/CUA_project.git</code></pre>
+    <p>안드로이드 앱은 <code>android/</code> 폴더에 있습니다. Android Studio에서 <b>이 <code>android/</code> 폴더를 프로젝트로 엽니다</b>(루트가 아니라).</p>
+  </div>
+</div>
+
+<h2>2. API 키 넣기 <span class="tag">중요·비밀</span></h2>
+<div class="step">
+  <div class="num">2</div>
+  <div class="step-body">
+    <h3><code>android/local.properties</code> 에 키 한 줄 추가</h3>
+    <p><code>android/local.properties</code> 파일을 열어(없으면 Android Studio가 Gradle sync 때 자동 생성) 아래 한 줄을 추가:</p>
+    <pre><code>GEMINI_API_KEY=여기에_본인_키</code></pre>
+    <p>빌드 시 이 값이 <code>BuildConfig.GEMINI_API_KEY</code>로 앱에 주입됩니다(<code>android/app/build.gradle.kts</code>가 읽음).</p>
+    <div class="callout danger">
+      🔒 <b>절대 커밋 금지.</b> <code>local.properties</code>는 <code>.gitignore</code>에 걸려 있습니다. 키를 소스코드나 스크린샷·채팅에 붙여넣지 마세요. 팀원끼리 <b>키를 공유하지 말고 각자 발급</b>해서 씁니다.
+    </div>
+  </div>
+</div>
+
+<h2>3. 빌드 & 설치</h2>
+<div class="step">
+  <div class="num">3</div>
+  <div class="step-body">
+    <h3>Android Studio에서 실행</h3>
+    <ul>
+      <li>Gradle sync가 끝날 때까지 대기(처음엔 의존성 다운로드로 몇 분 걸릴 수 있음).</li>
+      <li>폰을 USB로 연결 + <b>개발자 옵션 &gt; USB 디버깅</b> 켜기.</li>
+      <li>상단 툴바에서 기기 선택 후 <span class="kbd">▶ Run</span> → 폰에 앱 설치.</li>
+    </ul>
+    <p>참고 설정: <code>applicationId = com.cua.a11</code>, <code>minSdk 30</code>, <code>targetSdk 36</code>, <code>compileSdk 37</code>.</p>
+  </div>
+</div>
+
+<h2>4. 폰에서 권한 3개 켜기 <span class="tag">필수</span></h2>
+<div class="step">
+  <div class="num">4</div>
+  <div class="step-body">
+    <p>앱이 화면을 읽고 조작하고, 진행 상황을 알리려면 아래 권한이 필요합니다.</p>
+    <table>
+      <tr><th>권한</th><th>어디서</th><th>용도</th></tr>
+      <tr><td><b>접근성</b></td><td>설정 &gt; 접근성 &gt; <b>Android_run</b> &gt; 켜기</td><td>화면 캡처 + 탭/입력 실행 (핵심)</td></tr>
+      <tr><td><b>알림</b></td><td>앱 첫 실행 시 팝업 → 허용</td><td>실행 완료/오류 알림</td></tr>
+      <tr><td><b>다른 앱 위에 표시</b></td><td>실행 누르면 설정으로 안내 → 켜기</td><td>실행 중 진행 오버레이 창</td></tr>
+    </table>
+    <div class="callout warn">
+      ⚠️ <b>앱을 재설치하면 접근성 토글이 꺼질 수 있습니다.</b> 빌드/재설치 후엔 설정 &gt; 접근성에서 다시 켜세요.
+    </div>
+  </div>
+</div>
+
+<h2>5. 실행</h2>
+<div class="step">
+  <div class="num">5</div>
+  <div class="step-body">
+    <ul>
+      <li>앱을 열고 입력창에 목표를 한글/영어로 입력 — 예: <code>설정 앱을 열어</code></li>
+      <li><b>실행</b> 버튼 → 폰이 알아서 화면을 보며 단계별로 조작.</li>
+      <li>조작 대상 앱 위에 <b>오버레이 창</b>이 떠 <b>지금 턴</b>을 실시간 표시.</li>
+      <li>끝나면 <b>상태바 알림</b>으로 결과 표시(✅ 완료 / ⚠ 최대 턴 / ❌ 오류). 알림 탭 → 앱 복귀.</li>
+      <li><b>지난 로그 보기</b>: 실행 기록은 폰에 저장돼 언제든 다시 조회(‘로그 지우기’로 비움).</li>
+    </ul>
+    <p>첫 목표는 <code>설정 앱을 열어</code> 처럼 안전하고 짧은 걸로 테스트해 보세요.</p>
+  </div>
+</div>
+
+<div class="callout danger">
+  <b>🚫 안전 경고 — 지금은 자동승인 상태</b><br>
+  현재 위험 액션도 사람 확인 없이 자동 진행됩니다. <b>결제·구매·송금·삭제·전송</b> 같은 되돌릴 수 없는 작업은 시키지 마세요.
+  “장바구니 담기까지”, “검색까지”처럼 <b>되돌릴 수 있는 범위</b>만 테스트하세요. (실제 결제 마지막의 지문/PIN 화면은 보안상 접근성으로 조작 불가라 거기서 멈추긴 합니다.)
+</div>
+
+<h2>6. (선택) PC에서 원격 트리거 — 디버깅용</h2>
+<p>폰 단독으로 충분하지만, PC에서 목표를 쏘고 싶으면 폰과 <b>같은 Wi-Fi</b>에서:</p>
+<pre><code># 저장소 루트에서 (Python은 반드시 py 런처)
+py tools/send.py "설정 앱을 열어"      # 폰이 목표를 자율 실행
+py tools/send.py --shot               # 현재 폰 화면 캡처 → after.png</code></pre>
+<p>폰 IP는 <code>--ip 192.168.x.x</code> 로 지정(설정 &gt; Wi-Fi 상세에서 확인). 공유기 “AP 격리”가 켜져 있으면 소켓이 안 붙습니다.</p>
+
+<h2>문제 해결</h2>
+<table>
+  <tr><th>증상</th><th>원인 / 해결</th></tr>
+  <tr><td>빌드 에러 <code>unresolved reference: BuildConfig</code></td><td><code>buildConfig = true</code> 확인 + Gradle sync 다시. (이미 설정돼 있음)</td></tr>
+  <tr><td>실행하면 “접근성 서비스가 꺼져 있습니다”</td><td>설정 &gt; 접근성에서 Android_run 켜기(재설치 후 꺼짐)</td></tr>
+  <tr><td>“다른 앱 위에 표시 권한 필요” 반복</td><td>안내된 설정 화면에서 권한 ON 후 다시 실행</td></tr>
+  <tr><td>실행은 되는데 알림이 안 옴</td><td>앱 알림 권한 허용 여부 확인(설정 &gt; 앱 &gt; Android_run &gt; 알림)</td></tr>
+  <tr><td>HTTP 400/403 또는 즉시 오류</td><td><code>local.properties</code>의 <code>GEMINI_API_KEY</code> 오타/누락, 또는 키 권한 문제</td></tr>
+  <tr><td>탭이 좌상단만 눌림</td><td>드물게 좌표 환산 문제 — 최신 코드인지 확인(정상 빌드면 발생 안 함)</td></tr>
+</table>
+
+<footer>
+  모델: <code>gemini-3.5-flash</code> · 패키지: <code>com.cua.a11</code> · 저장소: github.com/simson86/CUA_project<br>
+  이 문서는 <b>폰 단독(온디바이스)</b> 실행 기준입니다. PC 드라이브(ADB/무선) 방식은 저장소 루트 <code>README.md</code> 참고.
+</footer>
+
+</div>
+</body>
+</html>
