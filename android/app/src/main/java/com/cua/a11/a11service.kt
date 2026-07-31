@@ -55,13 +55,14 @@ class a11service : AccessibilityService(), Executor {
         instance = null
         super.onDestroy()
     }
+    @Volatile private var cancelled = false
+    fun requestCancel() { cancelled = true }
     fun runTask(task: String, log: (String) -> Unit = {}): String {
         showOverlay(task)
         val r = try {
-            runAgent(this, cu, task, log = { line ->
-                log(line)              // 앱 화면 로그 + 파일
-                postOverlay(line)      // 오버레이 창
-            })
+            runAgent(this, cu, task,
+                log = { line -> log(line);postOverlay(line) },
+                cancel = {cancelled})
         } catch (e: Exception) {
             "오류: ${e.message}"     // screenshot/네트워크 예외도 알림에 잡히게
         }
@@ -73,6 +74,7 @@ class a11service : AccessibilityService(), Executor {
 
     private fun notifyDone(task: String, r: String) {
         val title = when {
+            r.startsWith("중단") -> " ■ 중단됨"
             r.startsWith("STOP") -> "⚠ 최대 턴 도달"
             r.startsWith("오류")  -> "❌ 실행 오류"
             else                  -> "✅ 실행 완료"

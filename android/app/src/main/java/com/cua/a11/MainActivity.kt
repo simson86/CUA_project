@@ -35,6 +35,7 @@ class MainActivity : AppCompatActivity() {
         val logScroll = findViewById<ScrollView>(R.id.logScroll)
         val histBtn   = findViewById<Button>(R.id.histBtn)
         val clearBtn  = findViewById<Button>(R.id.clearBtn)
+        val stopBtn = findViewById<Button>(R.id.stopBtn)
 
         histBtn.setOnClickListener {
             logView.text = loadHistory()
@@ -43,6 +44,11 @@ class MainActivity : AppCompatActivity() {
         clearBtn.setOnClickListener {
             logFile().delete()
             logView.text = "(로그 지움)"
+        }
+        stopBtn.setOnClickListener {
+            a11service.instance?.requestCancel()
+            result.text = "중단 요청됨… 현재 단계가 끝나면 멈춥니다."
+            stopBtn.isEnabled = false
         }
 
         runBtn.setOnClickListener {
@@ -67,6 +73,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             runBtn.isEnabled = false
+            stopBtn.isEnabled = true
             logView.text = ""
             result.text = "실행 중… ($task)"
             thread {
@@ -87,6 +94,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     result.text = r
                     runBtn.isEnabled = true
+                    stopBtn.isEnabled = false
                 }
             }
         }

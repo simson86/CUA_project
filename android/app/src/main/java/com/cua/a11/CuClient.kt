@@ -114,13 +114,14 @@ interface Executor {
 
 // 목표를 완료까지 자율 실행. 좌표는 안 만짐 — 환산은 exec.dispatch 내부에서.
 // 반드시 백그라운드 스레드에서 호출(네트워크+제스처 latch).
-fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:(String)->Unit={}):String{
+fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:(String)->Unit={}, cancel : () -> Boolean = {false}):String{
     fun emit(s:String){android.util.Log.i("a11cu",s);log(s)}
     var png = exec.screenshot()
     var resp = cu.cuCall(cu.userInput(task,png),null)
     var prevId = resp.optString("id")
 
     for(turn in 1..maxTurns){
+        if (cancel()) { emit("[중단] 사용자 중단"); return "중단: 사용자 중단" }
         val calls = cu.functionCalls(resp)
         if(calls.isEmpty()){
             val fin = cu.finalText(resp)
@@ -129,6 +130,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
         }
         val results= JSONArray()
         for (c in calls){
+            if (cancel()) { emit("[중단] 사용자 중단"); return "중단: 사용자 중단" }
             val name = c.optString("name")
             val callId = c.optString("id")
             val args = c.optJSONObject("arguments") ?: JSONObject()
