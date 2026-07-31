@@ -123,7 +123,10 @@ class a11service : AccessibilityService(), Executor {
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,   // 다른 앱 위
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or       // 입력 안 뺏음
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    // 터치를 아예 안 받는다. 이게 없으면 화면 최상단을 덮은 이 띠가
+                    // 그 영역의 탭을 먹어버려 dispatchGesture 가 목표에 닿지 못한다.
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
             )
             lp.gravity = Gravity.TOP
@@ -196,8 +199,16 @@ class a11service : AccessibilityService(), Executor {
             }
             "wait" -> Thread.sleep((args.optDouble("seconds", 1.0) * 1000).toLong())
             "take_screenshot" -> { /* 다음 스냅샷이 곧 결과 */ }
-            "list_apps" -> return JSONObject().put("apps",
-                JSONArray(packageManager.getInstalledPackages(0).map { it.packageName }))
+            // 런처가 있는 앱만. getInstalledPackages(0)은 시스템 패키지까지 수백 개를
+            // 쏟아내 모델이 목표 앱을 못 고른다. 원본 live/adb_bridge.py 의 `pm list packages -3`에 대응.
+            // 라벨을 함께 주어 한국어 지시("유튜브 열어줘")를 패키지명에 매칭할 수 있게 한다.
+            "list_apps" -> {
+                val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                val apps = packageManager.queryIntentActivities(q, 0)
+                    .map { "${it.loadLabel(packageManager)} (${it.activityInfo.packageName})" }
+                    .distinct().sorted()
+                return JSONObject().put("apps", JSONArray(apps))
+            }
             else -> throw IllegalArgumentException("Unknown action: $name")
         }
         return null
@@ -334,7 +345,10 @@ class a11service : AccessibilityService(), Executor {
         node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
     }
     private fun openApp (pkg: String){
-        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return
+        // 조용히 return 하면 dispatch 가 null 을 반환해 모델에 {"status":"ok"} 로 보고된다.
+        // 실패를 성공이라 속이면 모델이 자기교정을 못 한다. 예외는 runAgent 가 잡아 error 로 전달.
+        val intent = packageManager.getLaunchIntentForPackage(pkg)
+            ?: throw IllegalStateException("App $pkg is not installed or has no launcher.")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(intent)
     }

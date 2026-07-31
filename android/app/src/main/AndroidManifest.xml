@@ -5,6 +5,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
+    <!-- Android 11+ 패키지 가시성: 이 선언이 없으면 다른 앱이 보이지 않아
+         queryIntentActivities/getLaunchIntentForPackage 가 빈 결과·null 을 준다.
+         런처가 있는 앱만 조회하므로 QUERY_ALL_PACKAGES(민감 권한)보다 안전. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
