@@ -39,16 +39,33 @@ class CuClient(private val apiKey : String) {
         return JSONArray().put(JSONObject().put("type", "user_input").put("content", content))
     }
 
-    /** 턴2+ 입력 한 개: 액션 실행 결과(status) + 실행 후 화면. */
-    fun functionResult(name: String, callId: String, png: ByteArray,
-                       status: JSONObject, safetyAck: Boolean): JSONObject {
-        if (safetyAck) status.put("safety_acknowledgement", true)
-        val result = JSONArray()
-            .put(JSONObject().put("type", "text").put("text", status.toString()))  // JSON을 '문자열'로
-            .put(imageBlock(png))
-        return JSONObject()
-            .put("type", "function_result")
-            .put("name", name).put("call_id", callId).put("result", result)
+    /** 턴2+ 입력: 액션 실행 결과(status) + 실행 후 화면을 input 배열에 담는다.
+     *
+     *  일반 턴 — result = [text(JSON을 '문자열'로), image]. 문서/quickstart 형식 그대로.
+     *  승인 턴 — result = {..., "safety_acknowledgement": true} '객체', 화면은 user_input 으로 따로.
+     *
+     *  왜 승인 턴만 형식이 다른가(전부 실측):
+     *   - 텍스트 블록의 JSON 문자열 안에 넣으면(=문서 형식) 서버가 승인으로 못 읽는다
+     *     → "The safety decision ... must be acknowledged" 400. 불리언/문자열/미국식 철자 모두 실패.
+     *   - function_result 나 텍스트 블록의 형제 필드로 올리면 "Unknown parameter" 400.
+     *   - result 를 '객체'로 보낼 때만 구조화 필드로 읽힌다. 대신 객체 result 에는 이미지 블록을
+     *     못 실으므로, 실행 후 화면은 같은 input 배열의 user_input 으로 함께 보낸다.
+     *     (이미지를 아예 안 보내면 모델이 눈이 멀어 다음 턴에 take_screenshot 을 요청한다.)
+     */
+    fun putResult(input: JSONArray, name: String, callId: String, png: ByteArray,
+                  status: JSONObject, safetyAck: Boolean) {
+        val fr = JSONObject()
+            .put("type", "function_result").put("name", name).put("call_id", callId)
+        if (safetyAck) {
+            status.put("safety_acknowledgement", true)
+            input.put(fr.put("result", status))
+            input.put(JSONObject().put("type", "user_input")
+                .put("content", JSONArray().put(imageBlock(png))))
+        } else {
+            input.put(fr.put("result", JSONArray()
+                .put(JSONObject().put("type", "text").put("text", status.toString()))
+                .put(imageBlock(png))))
+        }
     }
 
     // ── 실제 호출 (원본 CUClient.create) ─────────────────────────
@@ -146,11 +163,12 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
                 val explanation = sd?.optString("explanation") ?: "되돌릴 수 없는 동작일 수 있습니다."
                 emit("[확인요청] $explanation")
                 if (!exec.confirm(explanation)) {            // 사용자 응답까지 블로킹
-                    emit("[거부] 사용자가 승인하지 않음")
-                    val rej = JSONObject().put("status", "error").put("error", "user_rejected")
-                    png = exec.screenshot()
-                    results.put(cu.functionResult(name, callId, png, rej, false))
-                    continue                                 // 실행하지 않고 다음 call로
+                    // 거부는 서버에 되돌리지 않고 여기서 끝낸다.
+                    // require_confirmation 을 낸 호출은 '승인 표시가 붙은 요청'만 받아준다 —
+                    // 거부 사실을 function_result 로 보고하려 하면 그 요청 자체가 400 으로 거절된다.
+                    // (구글 문서 예제도 거부 시 루프를 break 한다.)
+                    emit("[거부] 사용자가 승인하지 않음 — 실행 중단")
+                    return "중단: 사용자가 승인하지 않음"
                 }
                 safetyAck = true                             // 승인됨 → function_result에 ack
             }
@@ -165,7 +183,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
             }
             Thread.sleep(600)
             png = exec.screenshot()
-            results.put(cu.functionResult(name,callId, png, status, safetyAck))
+            cu.putResult(results, name, callId, png, status, safetyAck)
         }
         resp= cu.cuCall(results, prevId)
         prevId = resp.optString("id")

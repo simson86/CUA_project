@@ -381,7 +381,15 @@ class a11service : AccessibilityService(), Executor {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.CENTER; marginStart = dp(28); marginEnd = dp(28) })
 
-            fun close(res: Boolean) { approved = res; root?.let { wm.removeView(it) }; latch.countDown() }
+            // removeViewImmediate: 창을 '지금' 떼어낸다. removeView 는 제거를 예약만 하고 돌아오는데,
+            // 이 카드는 전체화면 모달(뒤 앱 오터치 방지)이라 아직 떠 있는 상태에서 dispatchGesture 를
+            // 쏘면 승인 직후의 탭을 카드가 먹어버린다(= 삭제가 안 되고 모델이 무한 재시도).
+            fun close(res: Boolean) {
+                approved = res
+                root?.let { wm.removeViewImmediate(it) }
+                root = null
+                latch.countDown()
+            }
             no.setOnClickListener { close(false) }
             ok.setOnClickListener { close(true) }
 
@@ -397,6 +405,7 @@ class a11service : AccessibilityService(), Executor {
         }
         val answered = latch.await(60, TimeUnit.SECONDS)
         if (!answered) { ui.post { root?.let { getSystemService(WindowManager::class.java).removeView(it) } }; return false }
+        Thread.sleep(150)   // 창이 실제로 화면에서 사라질 시간. 이 뒤라야 탭이 뒤 앱에 닿는다.
         return approved
     }
 
