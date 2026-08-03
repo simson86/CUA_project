@@ -20,6 +20,16 @@ class CuClient(private val apiKey : String) {
     //  중복 정의하면 서로 어긋날 때 모델이 혼란스러워진다. 여기 적는 건 도구 스펙이 모르는 것:
     //  우리 구현의 제약, 이 기기의 환경, 그리고 판단 규율뿐.
     //  매 턴 동일하게 전송되므로 프롬프트 캐시에 걸린다 — 작업 도중에 바꾸지 말 것.
+    //
+    //  ★ 규칙을 늘릴 때: 제약은 '길이'가 아니라 '희석'이다.
+    //  길이는 사실상 문제가 안 된다 — 한 턴 입력 약 1만 토큰 중 절반 이상이 스크린샷이고,
+    //  이 프롬프트는 매 턴 같은 값이라 캐시된다(실측 total_cached_tokens 6799).
+    //  진짜 문제는 규칙이 많아질수록 모델이 전부를 지키는 게 아니라 '어느 것도 잘 안 지킨다'는
+    //  것이다. 규칙 하나를 더할 때마다 기존 규칙들의 주의력을 나눠 갖는다.
+    //  그래서 앱별 특수사항처럼 특정 상황에서만 쓰이는 지식은 여기 쌓으면 안 된다 —
+    //  앱 10개 × 3줄을 넣으면 어떤 작업에서든 30줄 중 27줄이 노이즈다. 그런 건 해당 상황에서만
+    //  붙도록 a11service.appNotes(포그라운드 앱 기준) / taskNotes(목표 기준)로 보낼 것.
+    //  여기 남을 자격이 있는 문장은 '관련 없는 작업에서 읽어도 해가 없고, 항상 참인' 것뿐이다.
     private val system_prompt = """
         You are operating a real Android phone on behalf of its owner. Actions have real
         consequences — there is no sandbox and no undo.
