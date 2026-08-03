@@ -174,6 +174,23 @@ class a11service : AccessibilityService(), Executor {
     private var lastW = 0
     private var lastH = 0
 
+    // ── 앱별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ──────────────────────
+    //  지금 화면에 떠 있는 앱일 때만 모델에게 전달된다. system_prompt 에 넣으면 무관한
+    //  작업에서도 계속 따라다니며 다른 지시의 주의력을 뺏으므로, 여기 두고 조건부로 붙인다.
+    //  넣는 규칙:
+    //   - 로그에서 모델이 '실제로 반복해서 막히는 것'을 확인한 뒤에만 추가. 미리 상상해서 쓰지 말 것.
+    //   - 한 앱당 한두 줄. 왜 넣었는지(어떤 실패를 봤는지) 옆에 주석으로 남길 것.
+    //   - 앱이 업데이트되어 UI 가 바뀌면 낡은 메모가 모델을 오도한다 — 같이 정리할 것.
+    //   - 여러 앱에 공통인 사항이면 여기 말고 CuClient.taskNotes 나 system_prompt 쪽을 먼저 검토.
+    private val appNotes = mapOf<String, String>(
+        // "com.sec.android.gallery3d" to
+        //     "Samsung Gallery: tapping the trash icon opens a second dialog that must " +
+        //     "also be confirmed before the photo is actually deleted.",
+    )
+
+    override fun appNote(): String? =
+        rootInActiveWindow?.packageName?.toString()?.let { appNotes[it] }
+
     override fun screenshot(): ByteArray {
         hideForShot()                          // 오버레이 숨기고 프레임 대기
         val png = capturePngBlocking()
