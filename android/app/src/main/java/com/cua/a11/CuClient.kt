@@ -110,6 +110,7 @@ class CuClient(private val apiKey : String) {
 interface Executor {
     fun screenshot(): ByteArray
     fun dispatch(name: String, args: JSONObject): JSONObject?
+    fun confirm(explanation: String): Boolean
 }
 
 // 목표를 완료까지 자율 실행. 좌표는 안 만짐 — 환산은 exec.dispatch 내부에서.
@@ -135,6 +136,25 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
             val callId = c.optString("id")
             val args = c.optJSONObject("arguments") ?: JSONObject()
             emit("[턴 $turn] $name {${fmtArgs(args)}}")
+
+            // ── 안전 확인(HITL): 위험 액션은 '실행 전'에 사용자 승인 ──
+            // safety_decision 위치가 스펙(arguments 안)과 실제(스텝 형제 필드)가 다를 수 있어 둘 다 본다.
+            val sd = c.optJSONObject("safety_decision") ?: args.optJSONObject("safety_decision")
+            val needConfirm = sd?.optString("decision") == "require_confirmation"
+            var safetyAck = false
+            if (needConfirm) {
+                val explanation = sd?.optString("explanation") ?: "되돌릴 수 없는 동작일 수 있습니다."
+                emit("[확인요청] $explanation")
+                if (!exec.confirm(explanation)) {            // 사용자 응답까지 블로킹
+                    emit("[거부] 사용자가 승인하지 않음")
+                    val rej = JSONObject().put("status", "error").put("error", "user_rejected")
+                    png = exec.screenshot()
+                    results.put(cu.functionResult(name, callId, png, rej, false))
+                    continue                                 // 실행하지 않고 다음 call로
+                }
+                safetyAck = true                             // 승인됨 → function_result에 ack
+            }
+
             val status = JSONObject().put("status","ok")
             try {
                 val extra = exec.dispatch(name,args)
@@ -143,7 +163,6 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
                 status.put("status","error").put("error", e.message ?:"")
                 emit("⚠ dispatch실패 $name: ${e.message}")
             }
-            val safetyAck = args.has("safety_decision")
             Thread.sleep(600)
             png = exec.screenshot()
             results.put(cu.functionResult(name,callId, png, status, safetyAck))

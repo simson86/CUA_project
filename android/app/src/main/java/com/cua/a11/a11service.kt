@@ -34,6 +34,10 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
+import android.widget.FrameLayout
+import android.graphics.drawable.GradientDrawable
+import android.widget.LinearLayout
+import java.util.concurrent.TimeUnit
 
 
 class a11service : AccessibilityService(), Executor {
@@ -314,7 +318,89 @@ class a11service : AccessibilityService(), Executor {
         val out = client.getOutputStream()
         out.write("OK\n".toByteArray());out.flush()
     }
-    private fun dispatchBlocking(gesture:GestureDescription){
+    override fun confirm(explanation: String): Boolean {
+        if (!Settings.canDrawOverlays(this)) return false   // 권한 없으면 안전하게 거부
+        val latch = CountDownLatch(1)
+        var approved = false
+        var root: View? = null
+        ui.post {
+            val wm = getSystemService(WindowManager::class.java)
+            val d = resources.displayMetrics.density
+            fun dp(v: Int) = (v * d).toInt()
+
+            // 배경 딤(scrim) — 뒤를 어둡게 깔아 카드가 떠 보이게
+            val scrim = FrameLayout(this).apply { setBackgroundColor(0xB3000000.toInt()) }
+
+            // 카드(둥근 서피스)
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(28).toFloat()
+                    setColor(0xFF1E1F24.toInt())     // 순검정 대신 블루그레이 다크 서피스
+                }
+                setPadding(dp(24), dp(24), dp(24), dp(20))
+                elevation = dp(16).toFloat()
+            }
+
+            val icon = TextView(this).apply { text = "⚠️"; textSize = 30f }
+            val title = TextView(this).apply {
+                text = "동작 확인이 필요해요"
+                setTextColor(0xFFF2F3F5.toInt()); textSize = 19f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, dp(12), 0, 0)
+            }
+            val body = TextView(this).apply {
+                text = explanation
+                setTextColor(0xFFAAB0BA.toInt()); textSize = 14f    // 보조 회색
+                setLineSpacing(dp(4).toFloat(), 1f)
+                setPadding(0, dp(8), 0, dp(22))
+            }
+
+            // 둥근 알약 버튼(TextView 기반 — 커스텀 색/모서리)
+            fun pill(label: String, textColor: Int, bg: Int, border: Boolean) = TextView(this).apply {
+                text = label; setTextColor(textColor); textSize = 15f
+                gravity = Gravity.CENTER; isClickable = true
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, dp(14), 0, dp(14))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(16).toFloat(); setColor(bg)
+                    if (border) setStroke(dp(1), 0xFF3A3B42.toInt())
+                }
+            }
+            val no = pill("거부", 0xFFC9CDD4.toInt(), 0x00000000, border = true)   // 고스트
+            val ok = pill("승인", 0xFFFFFFFF.toInt(), 0xFF3B82F6.toInt(), border = false) // 파랑 강조
+
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(no, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(ok, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { marginStart = dp(12) })
+
+            card.addView(icon); card.addView(title); card.addView(body); card.addView(row)
+
+            scrim.addView(card, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.CENTER; marginStart = dp(28); marginEnd = dp(28) })
+
+            fun close(res: Boolean) { approved = res; root?.let { wm.removeView(it) }; latch.countDown() }
+            no.setOnClickListener { close(false) }
+            ok.setOnClickListener { close(true) }
+
+            val lp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                0,                                  // 모달: 전체를 덮어 뒤 앱 오터치 방지(버튼만 반응)
+                PixelFormat.TRANSLUCENT
+            )
+            root = scrim
+            wm.addView(scrim, lp)
+        }
+        val answered = latch.await(60, TimeUnit.SECONDS)
+        if (!answered) { ui.post { root?.let { getSystemService(WindowManager::class.java).removeView(it) } }; return false }
+        return approved
+    }
+
+private fun dispatchBlocking(gesture:GestureDescription){
         val latch = CountDownLatch(1)
         dispatchGesture(gesture,object : GestureResultCallback(){
             override fun onCompleted(d:GestureDescription?){latch.countDown()}
