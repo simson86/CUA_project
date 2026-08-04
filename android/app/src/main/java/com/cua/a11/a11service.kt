@@ -174,6 +174,23 @@ class a11service : AccessibilityService(), Executor {
     private var lastW = 0
     private var lastH = 0
 
+    // ── 앱별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ──────────────────────
+    //  지금 화면에 떠 있는 앱일 때만 모델에게 전달된다. system_prompt 에 넣으면 무관한
+    //  작업에서도 계속 따라다니며 다른 지시의 주의력을 뺏으므로, 여기 두고 조건부로 붙인다.
+    //  넣는 규칙:
+    //   - 로그에서 모델이 '실제로 반복해서 막히는 것'을 확인한 뒤에만 추가. 미리 상상해서 쓰지 말 것.
+    //   - 한 앱당 한두 줄. 왜 넣었는지(어떤 실패를 봤는지) 옆에 주석으로 남길 것.
+    //   - 앱이 업데이트되어 UI 가 바뀌면 낡은 메모가 모델을 오도한다 — 같이 정리할 것.
+    //   - 여러 앱에 공통인 사항이면 여기 말고 CuClient.taskNotes 나 system_prompt 쪽을 먼저 검토.
+    private val appNotes = mapOf<String, String>(
+        // "com.sec.android.gallery3d" to
+        //     "Samsung Gallery: tapping the trash icon opens a second dialog that must " +
+        //     "also be confirmed before the photo is actually deleted.",
+    )
+
+    override fun appNote(): String? =
+        rootInActiveWindow?.packageName?.toString()?.let { appNotes[it] }
+
     override fun screenshot(): ByteArray {
         hideForShot()                          // 오버레이 숨기고 프레임 대기
         val png = capturePngBlocking()
@@ -381,7 +398,15 @@ class a11service : AccessibilityService(), Executor {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.CENTER; marginStart = dp(28); marginEnd = dp(28) })
 
-            fun close(res: Boolean) { approved = res; root?.let { wm.removeView(it) }; latch.countDown() }
+            // removeViewImmediate: 창을 '지금' 떼어낸다. removeView 는 제거를 예약만 하고 돌아오는데,
+            // 이 카드는 전체화면 모달(뒤 앱 오터치 방지)이라 아직 떠 있는 상태에서 dispatchGesture 를
+            // 쏘면 승인 직후의 탭을 카드가 먹어버린다(= 삭제가 안 되고 모델이 무한 재시도).
+            fun close(res: Boolean) {
+                approved = res
+                root?.let { wm.removeViewImmediate(it) }
+                root = null
+                latch.countDown()
+            }
             no.setOnClickListener { close(false) }
             ok.setOnClickListener { close(true) }
 
@@ -397,6 +422,7 @@ class a11service : AccessibilityService(), Executor {
         }
         val answered = latch.await(60, TimeUnit.SECONDS)
         if (!answered) { ui.post { root?.let { getSystemService(WindowManager::class.java).removeView(it) } }; return false }
+        Thread.sleep(150)   // 창이 실제로 화면에서 사라질 시간. 이 뒤라야 탭이 뒤 앱에 닿는다.
         return approved
     }
 
