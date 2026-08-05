@@ -210,11 +210,18 @@ class a11service : AccessibilityService(), Executor {
                 pxX(args.getInt("start_x"), w).toFloat(), pxY(args.getInt("start_y"), h).toFloat(),
                 pxX(args.getInt("end_x"), w).toFloat(),   pxY(args.getInt("end_y"), h).toFloat(), 300)
             "type" -> { setText(args.getString("text")); if (args.optBoolean("press_enter", false)) imeEnter() }
-            "press_key" -> when (args.optString("key").lowercase()) {
+            "press_key" -> when (val k = args.optString("key").lowercase()) {
                 "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
                 "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
                 "enter" -> imeEnter()
                 "app_switch" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+                // else 가 없으면 지원하지 않는 키(숫자 등)를 조용히 무시하고 {"status":"ok"} 로
+                // 보고해, 모델이 '눌렸다'고 믿고 다음 단계로 넘어간다. 실측: 잠금화면에서
+                // press_key{key=4} 4번이 전부 무시됐는데 성공으로 보고돼 4턴이 낭비됐다.
+                // 실패는 실패로 알려야 모델이 다른 방법(좌표 탭)으로 자기교정한다.
+                else -> throw IllegalArgumentException(
+                    "Unsupported key '$k'. Supported: back, home, enter, app_switch. " +
+                    "To press an on-screen key, click its coordinates instead.")
             }
             "go_back" -> performGlobalAction(GLOBAL_ACTION_BACK)
             "open_app" -> {
@@ -311,6 +318,7 @@ class a11service : AccessibilityService(), Executor {
     private fun capturePngBlocking(): ByteArray {
         val latch = java.util.concurrent.CountDownLatch(1)
         var result = ByteArray(0)
+        var failCode: Int? = null
         takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor,
             object : TakeScreenshotCallback {
                 override fun onSuccess(r: ScreenshotResult) {
@@ -324,10 +332,16 @@ class a11service : AccessibilityService(), Executor {
                 }
                 override fun onFailure(code: Int) {
                     Log.e("A11y", "capture failed: $code")
+                    failCode = code
                     latch.countDown()
                 }
             })
         latch.await()
+        // 빈 배열을 그대로 돌려주면 곧바로 pngSize() 가 png[16] 을 읽다 터져
+        // "length=0; index=16" 같은 알 수 없는 메시지로 실행이 끝난다(실제 로그에서 관측).
+        // 원인이 드러나는 예외로 바꾼다.
+        failCode?.let { throw IllegalStateException("화면 캡처 실패 (code=$it)") }
+        if (result.isEmpty()) throw IllegalStateException("화면 캡처 결과가 비어 있음")
         return result
     }
 
