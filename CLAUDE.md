@@ -11,13 +11,14 @@ Agents that drive a **real Android device via ADB** using Google's **Gemini Comp
 **Update rule — 이 섹션은 기능이 바뀔 때마다 갱신한다.** 기능을 추가·수정·검증했으면 **같은 커밋에서** 아래 목록을 고쳐라. 새 줄을 덧붙이는 게 아니라 **기존 줄을 고쳐 쓰는** 문서다 (예: "구현됨" → "실기기 검증 완료"). 날짜별 `docs/progress/`는 시간순 *이력*이고, 이 섹션은 *현재 상태*다 — 역할이 다르니 둘 다 유지한다.
 
 ### 폰 단독 on-device (`android/`) — 현재 주력
-- ✅ CU 루프 — 화면 캡처 → 판단 → 접근성 실행, 최대 20턴 (`CuClient.runAgent`)
+- ✅ CU 루프 — 화면 캡처 → 판단 → 접근성 실행, 기본 20턴(앱에서 조절 가능) (`CuClient.runAgent`)
 - ✅ 액션 10종 — `click` `long_press` `drag_and_drop` `type`(+`press_enter`) `press_key`(back/home/enter/app_switch) `go_back` `open_app` `wait` `take_screenshot` `list_apps`
 - ✅ `list_apps`는 런처 있는 앱만 + 라벨 동반 → 한국어 지시("유튜브 열어줘")를 패키지명에 매칭
 - ✅ 한글 입력 — 포커스 노드에 `setText` 직접 주입 (ADB 경로와 달리 ADBKeyboard 불필요)
 - ✅ 실행 중 오버레이(현재 턴 표시) — 초기엔 이 띠가 화면 최상단 터치를 가로채 그 영역의 탭이 안 먹혔고, `FLAG_NOT_TOUCHABLE`로 **터치 통과**하게 수정됨. 확인 카드는 반대로 일부러 모달(아래 Gotchas)
 - ✅ 완료 알림 + 앱 내 로그 실시간 출력·파일 저장(`run_history.txt`)
 - ✅ 중단 버튼 — 루프 중간에 사용자가 멈춤
+- ✅ 최대 턴 수 사용자 설정 — 앱에서 1~40 지정(빈칸/오입력은 20, 범위 밖은 clamp 후 입력칸에 반영), `SharedPreferences`로 유지. 20턴 안에 안 끝나는 작업이 있어서 넣음. 소켓 `RUN`은 기본 20 고정 — 목표 문자열 파싱과 충돌해서 의도적으로 제외. **빌드 확인, 실기기 미검증**
 - ✅ **위험 액션 확인(HITL)** — `require_confirmation` 시 동의 카드 → 승인/거부. 실기기 검증 완료 (2026-08-04)
 - ✅ 8080 소켓 서버 (`a11service.startServer`) — PC가 같은 Wi-Fi에서 `SHOT`/`TAP`/`RUN` 등으로 원격 조종. 짝은 `live/a11service_bridge.py`
 - ⬜ 자체 안전 게이트 — 모델의 `safety_decision`과 별개로, 우리 규칙(포그라운드 패키지·노드 텍스트)으로 확인을 강제하는 경로. 모델 판단은 비결정적이라(아래 Gotchas) 필수 차단은 이쪽이 맡아야 함

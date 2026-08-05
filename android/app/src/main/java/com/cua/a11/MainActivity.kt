@@ -36,6 +36,8 @@ class MainActivity : AppCompatActivity() {
         val histBtn   = findViewById<Button>(R.id.histBtn)
         val clearBtn  = findViewById<Button>(R.id.clearBtn)
         val stopBtn = findViewById<Button>(R.id.stopBtn)
+        val turnsInput = findViewById<EditText>(R.id.maxTurnsInput)
+        turnsInput.setText(prefs.getInt("max_turns", 20).toString())
 
         histBtn.setOnClickListener {
             logView.text = loadHistory()
@@ -72,6 +74,11 @@ class MainActivity : AppCompatActivity() {
                     Uri.parse("package:$packageName")))
                 return@setOnClickListener
             }
+            // 빈칸·숫자 아님 → 20. 0 이하와 오타성 과대값만 잘라낸다(§0).
+            val maxTurns = (turnsInput.text.toString().trim().toIntOrNull() ?: 20)
+                .coerceIn(1, 40)
+            turnsInput.setText(maxTurns.toString())   // ★ clamp 결과를 화면에 되돌린다
+            prefs.edit().putInt("max_turns", maxTurns).apply()
             runBtn.isEnabled = false
             stopBtn.isEnabled = true
             logView.text = ""
@@ -79,7 +86,7 @@ class MainActivity : AppCompatActivity() {
             thread {
                 val runLog = StringBuilder()               // ← 이번 실행 로그 누적
                 val r = try {
-                    svc.runTask(task) { line ->
+                    svc.runTask(task,maxTurns) { line ->
                         runLog.append(line).append("\n")   // 파일용(백그라운드)
                         runOnUiThread {                    // 화면용
                             logView.append(line + "\n")
@@ -100,6 +107,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun logFile() = File(filesDir, "run_history.txt")
+    private val prefs by lazy { getSharedPreferences("cua", MODE_PRIVATE) }
 
     /** 한 실행 로그를 타임스탬프+목표 헤더와 함께 파일 끝에 append. */
     private fun saveLog(task: String, body: String) {

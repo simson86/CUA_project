@@ -61,13 +61,13 @@ class a11service : AccessibilityService(), Executor {
     }
     @Volatile private var cancelled = false
     fun requestCancel() { cancelled = true }
-    fun runTask(task: String, log: (String) -> Unit = {}): String {
+    fun runTask(task: String, maxTurns: Int = 20, log: (String) -> Unit = {}): String {
         // 지난 실행에서 중단 버튼이 눌렸으면 cancelled 가 true 로 남아 있다.
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
         cancelled = false
         showOverlay(task)
         val r = try {
-            runAgent(this, cu, task,
+            runAgent(this, cu, task,maxTurns,
                 log = { line -> log(line);postOverlay(line) },
                 cancel = {cancelled})
         } catch (e: Exception) {
