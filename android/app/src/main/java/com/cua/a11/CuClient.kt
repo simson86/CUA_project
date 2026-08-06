@@ -70,6 +70,8 @@ class CuClient(private val apiKey : String) {
         * Deleting, sending, purchasing, granting permissions, and accepting terms cannot
           be undone. Do only what the goal clearly asks for — never take such an action to
           explore or to see what happens.
+        * Never attempt to enter a password, PIN, pattern, or biometric prompt, and never
+          guess one. Take no action and report that user authentication is required.
     """.trimIndent()
 
     // ── 작업 유형별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ────────────────
