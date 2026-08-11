@@ -61,10 +61,21 @@ class a11service : AccessibilityService(), Executor {
     }
     @Volatile private var cancelled = false
     fun requestCancel() { cancelled = true }
-    fun runTask(task: String, maxTurns: Int = 20, log: (String) -> Unit = {}): String {
+    // ★ log 는 반드시 맨 뒤 — MainActivity 가 trailing lambda 로 넘긴다.
+    //   중간에 파라미터를 끼우면 `svc.runTask(task, maxTurns, model, thinking) { … }` 문법이 깨진다.
+    // ★ 새 파라미터엔 기본값을 준다 — 소켓 RUN 경로와 기존 호출부가 안 깨지게.
+    fun runTask(task: String, maxTurns: Int = 20,
+                model: String = CuClient.DEFAULT_MODEL,
+                thinking: String = CuClient.DEFAULT_THINKING,
+                log: (String) -> Unit = {}): String {
         // 지난 실행에서 중단 버튼이 눌렸으면 cancelled 가 true 로 남아 있다.
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
         cancelled = false
+        cu.model = model                     // 이번 판에 쓸 설정을 갈아끼운다
+        cu.thinkingLevel = thinking
+        // 이 줄을 빼지 말 것 — 설정을 바꿀 수 있게 만든 순간, '어떤 설정이 어떤 결과를 냈는지'가
+        // 기록에 안 남는 게 가장 큰 손해다. run_history.txt 에 남는 유일한 증거다.
+        log("[설정] ${cu.settingsLine()} maxTurns=$maxTurns")
         showOverlay(task)
         val r = try {
             runAgent(this, cu, task,maxTurns,
@@ -168,7 +179,16 @@ class a11service : AccessibilityService(), Executor {
         ui.post { tv.visibility = View.VISIBLE }
     }
 
-    private val cu by lazy { CuClient(BuildConfig.GEMINI_API_KEY) }
+    // 모델·사고수준은 앱 드롭다운에서 매 실행 고른다(문서: android_run-model-thinking.md).
+    // 그래서 여기 BuildConfig 값은 '씨앗'일 뿐이다 — 드롭다운의 첫 기본 선택이자, 소켓 RUN 처럼
+    // runTask 를 안 거치는 경로가 쓸 초기값. 비었거나 오타면 CuClient 가 기본값으로 떨군다.
+    private val cu by lazy {
+        CuClient(
+            BuildConfig.GEMINI_API_KEY,
+            BuildConfig.GEMINI_MODEL,
+            BuildConfig.GEMINI_THINKING,
+        )
+    }
     private val ui = Handler(Looper.getMainLooper())   // 메인스레드 post용
     private var overlayView: TextView? = null
     private var lastW = 0

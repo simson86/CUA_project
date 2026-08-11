@@ -9,7 +9,50 @@ import org.json.JSONObject
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 
-class CuClient(private val apiKey : String) {
+class CuClient(private val apiKey : String,
+               model: String = DEFAULT_MODEL,
+               thinking: String = DEFAULT_THINKING,) {
+    companion object{
+        /** 앱 드롭다운에 뜨는 모델 후보. 새 모델이 나오면 **여기 한 줄** 추가하면 앱에 뜬다.
+         *  자유 입력(EditText)을 안 쓰는 이유: 모델명 오타는 첫 cuCall 에서 HTTP 400 이고,
+         *  화면엔 `오류: HTTP 400: …` 으로만 보인다. 목록에서 고르면 그 실패가 아예 안 생긴다. */
+        val MODELS = listOf("gemini-3.5-flash", "gemini-3.6-flash")
+        /** 저장값·빌드값이 없거나 목록에 없을 때 쓸 모델. */
+        const val DEFAULT_MODEL = "gemini-3.5-flash"
+
+        /** 앱 드롭다운에 뜨는 사고수준 4종. REST 가 받는 값 그대로(평면 + **소문자**, §0). */
+        val THINKING = listOf("minimal", "low", "medium", "high")
+        /** 저장값·빌드값이 없거나 목록에 없을 때 쓸 값. 실측 권장치(멀티턴 턴 수 최소). */
+        const val DEFAULT_THINKING = "low"
+
+        /** [value] 가 목록의 몇 번째인지. 모르는 값이면 기본값 자리.
+         *
+         *  ★ `indexOf(...).coerceAtLeast(0)` 로 쓰면 안 된다 — 그건 못 찾았을 때 0번으로
+         *  떨어진다(사고수준이면 `minimal`). 우리가 원하는 대체값은 목록의 첫 항목이 아니라
+         *  **기본값**이다. 저장값이 목록보다 오래 사는 값이라(목록은 나중에 바뀐다) 이 분기는
+         *  실제로 탄다. `setSelection(-1)` 로 인한 IndexOutOfBounds 도 여기서 같이 막는다. */
+        fun modelIndex(value: String?): Int =
+            MODELS.indexOf(value).takeIf { it >= 0 } ?: MODELS.indexOf(DEFAULT_MODEL)
+        fun thinkingIndex(value: String?): Int =
+            THINKING.indexOf(value).takeIf { it >= 0 } ?: THINKING.indexOf(DEFAULT_THINKING)
+    }
+
+    // ── 이번 실행에 쓸 설정 ────────────────────────────────────
+    //  둘 다 `a11service.runTask` 가 실행 직전에 갈아끼운다.
+    //
+    //  왜 `val` 생성자 프로퍼티가 아니라 `var` 인가: `a11service.cu` 는 `by lazy` 라
+    //  **최초 1회만** 만들어지고 계속 재사용된다(`a11service.kt:174`). 생성자로만 받으면
+    //  첫 실행 이후로는 바꿀 수가 없어 "앱에서 고른다"가 성립하지 않는다.
+    //  `@Volatile` 인 이유: 소켓 서버가 **별도 스레드**에서 같은 `cu` 를 쓴다(`a11service.kt:294`).
+    //
+    //  생성자 인자는 '씨앗'일 뿐이다 — local.properties 의 GEMINI_MODEL/GEMINI_THINKING 이
+    //  드롭다운의 첫 기본 선택을 정한다. 비었거나 모르는 값이면 여기서 조용히 기본값으로 떨어진다.
+    //  기본값을 build.gradle.kts 가 아니라 이 클래스에서 채우는 이유는 §3 참조(출처를 한 곳으로).
+    @Volatile var model: String =
+        if (model in MODELS) model else DEFAULT_MODEL
+    @Volatile var thinkingLevel: String =
+        if (thinking in THINKING) thinking else DEFAULT_THINKING
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)   // 모델 추론 대기(루프 한 턴)
@@ -82,6 +125,8 @@ class CuClient(private val apiKey : String) {
         //     "Deletion flows are two-step: after the delete tap, expect a confirmation " +
         //     "dialog, and verify the item is gone from the list before finishing.",
     )
+    /** run_history.txt 에 남길 설정 요약. 지난 실행이 어떤 설정이었는지 알 수 있게 한다. */
+    fun settingsLine() = "model=$model thinking=$thinkingLevel"
 
     /** 목표 문장에 걸리는 참고사항. 목표는 실행 내내 안 바뀌므로 매 턴 같은 값이다. */
     fun taskNote(task: String): String? =
@@ -140,12 +185,16 @@ class CuClient(private val apiKey : String) {
     /** input 배열 + 선택적 previous_interaction_id → 응답 JSON */
     fun cuCall(input: JSONArray, prevId: String?): JSONObject {
         val body = JSONObject()
-            .put("model", "gemini-3.5-flash")
+            .put("model", model)
             .put("input", input)
             .put("system_instruction", system_prompt)
             .put("tools", JSONArray().put(JSONObject()
                 .put("type", "computer_use").put("environment", "mobile")))
         if (prevId != null) body.put("previous_interaction_id", prevId)  // 턴2+에서만
+        // 사고수준은 이제 항상 보낸다(앱에서 4종 중 하나를 반드시 고르므로 '미지정'이 없다).
+        // 형식은 '평면 + 소문자' — SDK 형식(generation_config.thinking_config 중첩)은 이 엔드포인트에서
+        // 400 이다. 실측표는 docs/reference/android_run-model-thinking.md §0. 문서를 근거로 되돌리지 말 것.
+        body.put("generation_config", JSONObject().put("thinking_level", thinkingLevel))
 
         val req = Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/interactions")
