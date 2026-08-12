@@ -1,0 +1,14 @@
+<!-- 마이크 아이콘 색. ImageButton 은 Button 과 달리 비활성 상태를 스스로 흐리게 만들지
+     않으므로, 실행 중 잠갔을 때(micBtn.isEnabled = false) 티가 나도록 직접 지정한다.
+     ★ state_enabled="false" 를 먼저 둔다 — selector 는 위에서부터 먼저 맞는 항목을 쓴다. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_enabled="false"
+        android:alpha="0.3"
+        android:color="?attr/colorOnSurface"/>
+    <!-- 듣는 중 (micBtn.isSelected = true) — 녹음 중이라는 걸 색으로 알린다 -->
+    <item
+        android:state_selected="true"
+        android:color="?attr/colorError"/>
+    <item android:color="?attr/colorPrimary"/>
+</selector>
