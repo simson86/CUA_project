@@ -848,7 +848,17 @@ class a11service : AccessibilityService(), Executor {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                0,                                  // 모달: 전체를 덮어 뒤 앱 오터치 방지(버튼만 반응)
+                // ★ FLAG_NOT_FOCUSABLE 이 없으면(예전 flags=0) 이 창이 입력 포커스를 가져가고,
+                //   그 순간 뒤 앱의 입력칸이 포커스를 잃어 **키보드가 내려간다**. 키보드가 사라지면
+                //   뒤 앱 레이아웃이 다시 흘러 버튼 위치가 바뀌는데, 승인 후 우리가 쏘는 탭 좌표는
+                //   **카드가 뜨기 전 화면**을 보고 모델이 계산한 값이라 엉뚱한 곳을 누른다.
+                //   실측(2026-08-12, ChatGPT 메시지 전송): 전송 버튼 승인을 3번 했는데 3번 다
+                //   안 나갔다. 카드가 닫히면 키보드가 다시 올라와 다음 턴엔 반대로 어긋난다.
+                //
+                //   이 플래그는 FLAG_NOT_TOUCH_MODAL 을 함께 켜서 '창 밖' 터치를 통과시키지만,
+                //   이 창은 MATCH_PARENT × MATCH_PARENT 라 **바깥이 없다** — 화면 전체가 창 안이므로
+                //   모든 터치를 그대로 흡수한다. 즉 오터치 방지는 그대로다.
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
             )
             root = scrim
