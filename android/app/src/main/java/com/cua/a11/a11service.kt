@@ -70,6 +70,9 @@ class a11service : AccessibilityService(), Executor {
         const val CRED_TIMEOUT_MIN = 5L
         const val CRED_DONE = 0   // 사용자가 직접 입력을 마침 → 이어서 진행
         const val CRED_STOP = 1   // 사용자가 중단을 선택
+        // 모델이 잘못 판단해 카드를 띄웠을 때의 탈출구. **모델 경로에서만** 제공한다 —
+        // 비밀번호 게이트에서 이걸 열어주면 '모델의 추측값을 비밀번호 칸에 넣어라'가 된다.
+        const val CRED_SKIP = 2   // "입력할 것 없다, 그냥 계속해"
     }
 
     override fun onUnbind(intent: Intent?): Boolean{
@@ -409,14 +412,25 @@ class a11service : AccessibilityService(), Executor {
      *  값 자체는 우리 손을 거치지 않는다 — 사용자가 뒤 앱의 진짜 키보드로 직접 친다.
      *  그래서 run_history.txt 에도 남지 않는다.
      */
-    private fun credentialHandover(reason: String): JSONObject {
-        if (showCredentialCard(reason) == CRED_STOP) {
-            // 확인 카드의 '거부'와 같은 취급 — 여기서 끝낸다. dispatch 는 '루프를 끝내라'를
-            // 직접 말할 수단이 없으므로 취소 깃발을 세우고, runAgent 가 다음 턴에서 확인한다.
-            requestCancel()
-            throw IllegalStateException(
-                "The device owner declined to enter the value. Stop and report that the task " +
-                "cannot continue without their input.")
+    private fun credentialHandover(reason: String, allowSkip: Boolean = false): JSONObject {
+        when (showCredentialCard(reason, allowSkip)) {
+            CRED_STOP -> {
+                // 확인 카드의 '거부'와 같은 취급 — 여기서 끝낸다. dispatch 는 '루프를 끝내라'를
+                // 직접 말할 수단이 없으므로 취소 깃발을 세우고, runAgent 가 다음 턴에서 확인한다.
+                requestCancel()
+                throw IllegalStateException(
+                    "The device owner declined to enter the value. Stop and report that the task " +
+                    "cannot continue without their input.")
+            }
+            // 모델이 헛짚었다는 뜻이다. 실행을 끝내지 않고 '네 판단이 틀렸으니 그냥 진행하라'고
+            // 알린다. 반복 호출은 이 문장으로만 막는다 — 면제 목록을 두면 뒤늦게 진짜로 필요해진
+            // 입력까지 조용히 통과시키게 된다.
+            CRED_SKIP -> return JSONObject()
+                .put("status", "not_needed")
+                .put("message",
+                    "The device owner says nothing needs to be entered here — you were not " +
+                    "actually blocked. Re-read the screenshot and continue with the task " +
+                    "without asking for input again.")
         }
         return JSONObject()
             .put("status", "user_entered")
@@ -430,10 +444,11 @@ class a11service : AccessibilityService(), Executor {
      *  FLAG_NOT_FOCUSABLE 이 특히 중요하다: 이 창이 포커스를 가져가면 뒤 앱의 입력칸이 포커스를
      *  잃어 키보드가 내려간다. 그러면 정작 입력을 못 한다.
      *
-     *  [그냥 계속] 같은 선택지는 일부러 없다 — 여기서 '계속'은 모델이 지어낸 값을 비밀번호 칸에
+     *  [필요 없어요]는 **모델 경로에서만** 뜬다(allowSkip). 모델이 헛짚었을 때의 탈출구다.
+     *  비밀번호 게이트에서는 없어야 한다 — 거기서 '계속'은 모델이 지어낸 값을 비밀번호 칸에
      *  넣으라는 뜻이 되기 때문이다. 검은 화면 카드의 [그냥 계속]과는 성격이 다르다.
      */
-    private fun showCredentialCard(reason: String): Int {
+    private fun showCredentialCard(reason: String, allowSkip: Boolean): Int {
         if (!Settings.canDrawOverlays(this)) return CRED_STOP   // 물어볼 수 없으면 진행하지 않는다
         val latch = CountDownLatch(1)
         var choice = CRED_STOP
@@ -476,12 +491,18 @@ class a11service : AccessibilityService(), Executor {
                 }
             }
             val done = pill("입력했어요", 0xFFFFFFFF.toInt(), 0xFF3B82F6.toInt(), false)
+            val skip = if (allowSkip) pill("필요 없어요", 0xFFC9CDD4.toInt(), 0x00000000, true) else null
             val stop = pill("중단", 0xFFC9CDD4.toInt(), 0x00000000, true)
 
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(done, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
-            row.addView(stop, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                .apply { marginStart = dp(8) })
+            row.addView(done, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT,
+                if (allowSkip) 1.8f else 2f))
+            skip?.let {
+                row.addView(it, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
+                    .apply { marginStart = dp(8) })
+            }
+            row.addView(stop, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT,
+                if (allowSkip) 0.7f else 1f).apply { marginStart = dp(8) })
 
             card.addView(title); card.addView(body); card.addView(row)
 
@@ -491,6 +512,7 @@ class a11service : AccessibilityService(), Executor {
                 root = null; pendingLatch = null; latch.countDown()
             }
             done.setOnClickListener { close(CRED_DONE) }
+            skip?.setOnClickListener { close(CRED_SKIP) }
             stop.setOnClickListener { close(CRED_STOP) }
 
             val lp = WindowManager.LayoutParams(
@@ -600,8 +622,12 @@ class a11service : AccessibilityService(), Executor {
             // 모델이 '내가 모르는 값을 요구받았다'고 스스로 알릴 때 부르는 통로(CuClient.REQUEST_USER_INPUT).
             // 인증번호처럼 노드에 아무 표식이 없는 경우(실측: isPassword·resource-id·content-desc 모두 빔)는
             // 코드가 알아낼 방법이 없어 이 경로가 유일한 수단이다. 근거는 CLAUDE.md Gotchas.
+            // allowSkip=true — 모델 판단이라 헛짚을 수 있다(실측: 인증번호 화면 참양성 2/5).
+            // 잘못 떴을 때 사용자가 [필요 없어요]로 빠져나가지 못하면, 아무것도 안 치고
+            // [입력했어요]를 누를 수밖에 없고 그러면 모델에게 거짓을 보고하게 된다.
             "request_user_input" -> return credentialHandover(
-                args.optString("reason").ifBlank { "직접 입력이 필요한 값이 있습니다." })
+                args.optString("reason").ifBlank { "직접 입력이 필요한 값이 있습니다." },
+                allowSkip = true)
             "press_key" -> when (val k = args.optString("key").lowercase()) {
                 "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
                 "home" -> performGlobalAction(GLOBAL_ACTION_HOME)

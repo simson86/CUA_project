@@ -151,6 +151,8 @@ class CuClient(private val apiKey : String,
           `request_user_input` with a short reason instead of typing. The owner enters it
           themselves, and you continue from the next screenshot — this is not a failure and
           not a reason to stop.
+        * A one-time code belongs to the owner even when it is reachable on this phone. Do not
+          open their mail or messages to look it up — ask for it with `request_user_input`.
     """.trimIndent()
 
     // ── 작업 유형별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ────────────────
