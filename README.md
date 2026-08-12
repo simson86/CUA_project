@@ -55,12 +55,34 @@ android/        폰 접근성 앱 (Kotlin, Android Studio 프로젝트)
 
 ### 1) 폰 앱 설치 (`android/`)
 1. **Android Studio**로 `android/` 폴더 열기 (Gradle sync 자동)
-2. 폰 연결 → **Run ▶** 로 설치 (minSdk 30 이상 필요; 최초 1회만 USB, 이후 무선)
-3. 폰 **설정 → 접근성 → (앱 이름) → 켜기**
-4. 폰과 PC를 **같은 Wi-Fi**에 (모바일 데이터 아님)
-5. 폰 IP 확인: **설정 → Wi-Fi → 연결된 네트워크 상세** (예 `192.168.0.51`)
+2. **`android/local.properties`에 API 키 넣기** ⚠️ 이거 없으면 앱이 빌드는 되지만 실행하면 401.
+   이 파일은 gitignore라 각자 만들어야 한다 — 앱은 `.env`를 **안 읽는다**(빌드 시점에 굳는다).
+   ```properties
+   GEMINI_API_KEY=여기에_본인_키
+   ```
+3. 폰 연결 → **Run ▶** 로 설치 (minSdk 30 이상 필요; 최초 1회만 USB, 이후 무선)
+4. 폰 **설정 → 접근성 → (앱 이름) → 켜기**
+5. 폰과 PC를 **같은 Wi-Fi**에 (모바일 데이터 아님)
+6. 폰 IP 확인: **설정 → Wi-Fi → 연결된 네트워크 상세** (예 `192.168.0.51`)
 
 > 앱을 재설치하면 접근성 토글이 꺼질 수 있으니 매번 다시 켜기.
+
+#### 앱 화면에서 고를 수 있는 것
+목표 입력칸 아래 세 가지. 고른 값은 폰에 저장돼 다음 실행에도 유지된다.
+
+| 항목 | 값 | 기본 |
+|---|---|---|
+| **최대 턴** | 1~40 | 20 |
+| **모델** | `gemini-3.5-flash` / `gemini-3.6-flash` | 3.5 |
+| **사고수준** | `minimal` / `low` / `medium` / `high` | `low` |
+
+- 실행 로그 첫 줄에 `[설정] model=… thinking=… maxTurns=…`이 찍히므로, 지난 실행이 어떤
+  설정이었는지 `run_history.txt`에서 확인할 수 있다.
+- **새 모델을 추가하려면** `CuClient.MODELS`에 한 줄 넣으면 드롭다운에 뜬다.
+- 앱을 **처음 설치했을 때의 출발점**을 바꾸고 싶으면 `android/local.properties`에
+  `GEMINI_MODEL=` / `GEMINI_THINKING=`을 채운다(선택). 한 번 실행하면 앱에 저장된 값이 우선한다.
+- 사고수준은 **낮다고 싸지 않다.** 비용의 대부분은 턴마다 들어가는 스크린샷이라, `minimal`로
+  두면 모델이 헤매 턴이 늘어 오히려 손해다. 근거는 `docs/reference/thinking-level.md` §6.
 
 ### 2) PC에서 실행 (폰 IP를 환경변수로)
 ```powershell
@@ -94,7 +116,8 @@ print("ack",s.recv(16)); s.close()
 ---
 
 ## 주의
-- **비밀:** `.env`(GEMINI_API_KEY)는 gitignore. 공유 금지. 협업자는 각자 키를 넣는다.
+- **비밀:** `.env`(PC용)와 `android/local.properties`(앱용) 둘 다 gitignore. **서로 공유되지 않으니 각자 두 곳에 키를 넣는다.** 공유 금지.
+  - ⚠️ 앱 키는 빌드 시 `BuildConfig`로 **APK 안에 박힌다** — APK를 남에게 주면 키를 주는 것이다.
 - **같은 Wi-Fi 필수** + 공유기 **AP 격리(기기간 통신 차단)** 꺼져 있어야 소켓이 붙는다.
-- 모델 id: `gemini-3.5-flash` (`cua/cu_client.py`).
+- 모델 id: PC 경로는 `gemini-3.5-flash` 고정 (`cua/cu_client.py`). **폰 앱은 화면에서 고른다**(위 표).
 - 폰 접근성 앱 프로토콜: PC `SHOT`→`[len4][PNG]`, `TAP/SWIPE/LONGPRESS/TEXT/ENTER/BACK/HOME/RECENTS/OPEN`→`OK`.

@@ -20,6 +20,7 @@ Agents that drive a **real Android device via ADB** using Google's **Gemini Comp
 - ✅ 완료 알림 + 앱 내 로그 실시간 출력·파일 저장(`run_history.txt`)
 - ✅ 중단 버튼 — 루프 중간에 사용자가 멈춤
 - ✅ 최대 턴 수 사용자 설정 — 앱에서 1~40 지정(빈칸/오입력은 20, 범위 밖은 clamp 후 입력칸에 반영), `SharedPreferences`로 유지. 20턴 안에 안 끝나는 작업이 있어서 넣음. 소켓 `RUN`은 기본 20 고정 — 목표 문자열 파싱과 충돌해서 의도적으로 제외. **빌드 확인, 실기기 미검증**
+- ✅ 모델·사고수준을 앱에서 선택 — 드롭다운 2개(`CuClient.MODELS`: `gemini-3.5-flash`/`gemini-3.6-flash` × `CuClient.THINKING`: `minimal`/`low`/`medium`/`high`), `SharedPreferences` 유지. 값 우선순위는 **저장값 > `android/local.properties`의 `GEMINI_MODEL`·`GEMINI_THINKING`(= 드롭다운 첫 기본 선택, 빌드 시 `BuildConfig`로) > `CuClient` 기본값(3.5-flash / low)**. 실행 로그 첫 줄 `[설정] model=… thinking=… maxTurns=…`에 기록. 소켓 `RUN`은 앱이 마지막에 고른 설정을 물려받음(그 경로는 `[설정]` 줄 없음). 새 모델은 `CuClient.MODELS`에 한 줄 추가. **빌드·구성캐시 검증 완료, 실기기 미검증**
 - ✅ **위험 액션 확인(HITL)** — `require_confirmation` 시 동의 카드 → 승인/거부. 실기기 검증 완료 (2026-08-04)
 - ✅ 8080 소켓 서버 (`a11service.startServer`) — PC가 같은 Wi-Fi에서 `SHOT`/`TAP`/`RUN` 등으로 원격 조종. 짝은 `live/a11service_bridge.py`
 - 🔶 자체 안전 게이트 — 모델의 `safety_decision`과 별개로 우리 규칙으로 판단하는 경로. **인계 카드가 첫 사례**(픽셀로 판정, 모델 판단 안 씀). 위험 액션 차단(예: 특정 앱에서의 모든 탭)은 아직 미구현 — 모델 판단은 비결정적이라(아래 Gotchas) 필수 차단은 이쪽이 맡아야 함
@@ -44,6 +45,20 @@ Agents that drive a **real Android device via ADB** using Google's **Gemini Comp
 객체 `result`에는 이미지 블록을 못 실으므로 **실행 후 화면은 같은 `input` 배열에 `user_input`으로 따로** 보낸다. 화면을 빼면 모델이 눈이 멀어 다음 턴에 `take_screenshot`을 요청한다(대조 실험으로 확인). 구현·근거는 `CuClient.putResult` 주석 참조. **문서를 근거로 되돌리지 말 것.**
 
 거부는 서버에 되돌리지 말고 **루프를 즉시 끝낸다** — 승인 표시 없는 후속 요청은 무조건 400이다.
+
+### 사고수준은 SDK와 REST의 형식이 다르다 — 평면 + 소문자 ★
+`android/`는 REST(`v1beta/interactions`)로 직접 쏜다. 거기서 `thinking_level`은 **`generation_config` 바로 아래에 평평하게, 소문자로** 넣어야 한다. 2026-08-06 실측:
+
+| 보낸 형식 | 결과 |
+|---|---|
+| `generation_config.thinking_config.thinking_level` (**파이썬 SDK 형식**) | ❌ 400 `Unknown parameter 'thinking_config'` |
+| `generationConfig.thinkingConfig.thinkingLevel` (camelCase) | ❌ 400 `Did you mean 'generation_config'?` |
+| `generation_config.thinking_level = "HIGH"` (평면, 대문자) | ❌ 400 `Supported values: 'minimal', 'low', 'medium', 'high'` |
+| **`generation_config.thinking_level = "high"`** | ✅ 200 |
+
+이 서버는 **모르는 키를 반드시 거절한다**(엉터리 키로 대조군을 먼저 확인). 그래서 200 = 실제로 읽혔다는 뜻이고, `usage.total_thought_tokens`도 값에 따라 움직인다(3.5-flash: 미지정 63 / `minimal` 0 / `high` 149).
+
+**주의:** `docs/reference/thinking-level.md`는 SDK(`google-genai`) 기준 문서다. 일반 `generate_content`는 `thinking_config` **중첩**이 맞아서, 그쪽을 근거로 REST 코드를 "고치면" 400이 된다. 안전 승인 형식(위)과 정확히 같은 구도다. ⚠️ 실제로 `cua/cu_client.py`의 `_build_generation_config`가 중첩 형식이라 **2026-07-17 이후 `live --thinking`/`CU_THINKING_LEVEL`이 조용히 무효**다(400도 안 남). 파이썬 쪽은 현재 작업 범위 밖이라 **미수정** — 근거·수치는 `docs/reference/android_run-model-thinking.md` §14.
 
 ### `safety_decision`은 매번 붙지 않는다
 같은 "알람 삭제" 작업이 한 실행에선 `require_confirmation`이 붙고 다음 실행에선 안 붙어 확인 없이 실행됐다. 규칙표가 아니라 모델의 그때그때 판단이라 **비결정적**이다. 확인 카드를 최종 방어선으로 신뢰하지 말 것. 판단 기준은 구글 내장 정책 7종이며 API로는 *끄는* 것만 가능하고 새 기준 추가 입구는 없다.

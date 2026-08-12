@@ -5,9 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import kotlin.concurrent.thread
@@ -38,6 +40,22 @@ class MainActivity : AppCompatActivity() {
         val stopBtn = findViewById<Button>(R.id.stopBtn)
         val turnsInput = findViewById<EditText>(R.id.maxTurnsInput)
         turnsInput.setText(prefs.getInt("max_turns", 20).toString())
+
+        // 모델·사고수준 드롭다운 — 값 목록은 CuClient.MODELS / CuClient.THINKING 이 유일한 출처다.
+        // 우선순위: 저장값(SharedPreferences) > 빌드값(local.properties) > CuClient 기본값.
+        // 목록에 없는 값이 저장돼 있으면 modelIndex/thinkingIndex 가 기본값 자리로 떨궈 준다
+        // (setSelection(-1) → selectedItemPosition == -1 → IndexOutOfBounds 방지).
+        val modelSpinner = findViewById<Spinner>(R.id.modelSpinner)
+        modelSpinner.adapter = ArrayAdapter(this,
+            android.R.layout.simple_spinner_dropdown_item, CuClient.MODELS)
+        modelSpinner.setSelection(CuClient.modelIndex(
+            prefs.getString("model", null) ?: BuildConfig.GEMINI_MODEL))
+
+        val thinkSpinner = findViewById<Spinner>(R.id.thinkingSpinner)
+        thinkSpinner.adapter = ArrayAdapter(this,
+            android.R.layout.simple_spinner_dropdown_item, CuClient.THINKING)
+        thinkSpinner.setSelection(CuClient.thinkingIndex(
+            prefs.getString("thinking", null) ?: BuildConfig.GEMINI_THINKING))
 
         histBtn.setOnClickListener {
             logView.text = loadHistory()
@@ -78,7 +96,13 @@ class MainActivity : AppCompatActivity() {
             val maxTurns = (turnsInput.text.toString().trim().toIntOrNull() ?: 20)
                 .coerceIn(1, 40)
             turnsInput.setText(maxTurns.toString())   // ★ clamp 결과를 화면에 되돌린다
-            prefs.edit().putInt("max_turns", maxTurns).apply()
+            val model = CuClient.MODELS[modelSpinner.selectedItemPosition]
+            val thinking = CuClient.THINKING[thinkSpinner.selectedItemPosition]
+            prefs.edit()
+                .putInt("max_turns", maxTurns)
+                .putString("model", model)
+                .putString("thinking", thinking)
+                .apply()
             runBtn.isEnabled = false
             stopBtn.isEnabled = true
             logView.text = ""
@@ -86,7 +110,7 @@ class MainActivity : AppCompatActivity() {
             thread {
                 val runLog = StringBuilder()               // ← 이번 실행 로그 누적
                 val r = try {
-                    svc.runTask(task,maxTurns) { line ->
+                    svc.runTask(task, maxTurns, model, thinking) { line ->
                         runLog.append(line).append("\n")   // 파일용(백그라운드)
                         runOnUiThread {                    // 화면용
                             logView.append(line + "\n")
