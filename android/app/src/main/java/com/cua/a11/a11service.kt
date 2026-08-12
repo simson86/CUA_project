@@ -472,6 +472,35 @@ class a11service : AccessibilityService(), Executor {
                 setTextColor(0xFFF2F3F5.toInt()); textSize = 17f
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             }
+            // 접기/펼치기 — 카드가 로그인 폼의 아이디 입력칸을 가리는 경우가 있다(실사용 발견).
+            // 창 높이가 WRAP_CONTENT 라 안쪽 뷰를 GONE 하면 창 자체가 함께 줄어든다.
+            val toggle = TextView(this).apply {
+                text = "▴"
+                setTextColor(0xFFAAB0BA.toInt()); textSize = 18f
+                gravity = Gravity.CENTER; isClickable = true
+                setPadding(dp(14), dp(4), dp(6), dp(4))
+            }
+            // 접힌 상태에도 [입력했어요]를 남긴다. 입력을 마치고 '펼치기 → 누르기'로 두 번
+            // 만지게 하면, 정작 가려서 접은 사용자에게 다시 번거로움을 주는 셈이다.
+            val doneMini = TextView(this).apply {
+                text = "입력했어요"
+                setTextColor(0xFFFFFFFF.toInt()); textSize = 12f
+                gravity = Gravity.CENTER; isClickable = true; visibility = View.GONE
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(dp(12), dp(7), dp(12), dp(7))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat(); setColor(0xFF3B82F6.toInt())
+                }
+            }
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            header.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            header.addView(doneMini, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            header.addView(toggle, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             // 모델이 준 reason 을 그대로 쓴다. 화면 언어에 맞춰 한국어로 오고, 무엇을 왜 입력해야
             // 하는지가 상황마다 다르므로 우리가 문구를 지어내는 것보다 정확하다.
             val body = TextView(this).apply {
@@ -504,7 +533,20 @@ class a11service : AccessibilityService(), Executor {
             row.addView(stop, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT,
                 if (allowSkip) 0.7f else 1f).apply { marginStart = dp(8) })
 
-            card.addView(title); card.addView(body); card.addView(row)
+            card.addView(header); card.addView(body); card.addView(row)
+
+            var expanded = true
+            fun setExpanded(v: Boolean) {
+                expanded = v
+                body.visibility = if (v) View.VISIBLE else View.GONE
+                row.visibility  = if (v) View.VISIBLE else View.GONE
+                doneMini.visibility = if (v) View.GONE else View.VISIBLE
+                toggle.text = if (v) "▴" else "▾"        // 화살표는 '누르면 일어날 일'을 가리킨다
+                title.textSize = if (v) 17f else 14f
+                if (v) card.setPadding(dp(20), dp(18), dp(20), dp(16))
+                else   card.setPadding(dp(18), dp(10), dp(10), dp(10))
+            }
+            toggle.setOnClickListener { setExpanded(!expanded) }
 
             fun close(res: Int) {
                 choice = res
@@ -512,6 +554,7 @@ class a11service : AccessibilityService(), Executor {
                 root = null; pendingLatch = null; latch.countDown()
             }
             done.setOnClickListener { close(CRED_DONE) }
+            doneMini.setOnClickListener { close(CRED_DONE) }
             skip?.setOnClickListener { close(CRED_SKIP) }
             stop.setOnClickListener { close(CRED_STOP) }
 
