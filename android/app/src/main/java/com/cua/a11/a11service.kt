@@ -63,6 +63,13 @@ class a11service : AccessibilityService(), Executor {
         const val HANDOVER_STOP = 2   // 실행 중단
         // [직접 하겠습니다]를 누른 뒤 사용자가 인증할 시간. 짧으면 아직 잠긴 화면을 찍는다.
         const val HANDOVER_SELF_WAIT_MS = 5000L
+
+        // ── 자격증명 입력 인계 ──────────────────────────────────
+        //  인계 카드(위)와 목적이 다르다. 저쪽은 '모델이 화면을 못 봄', 이쪽은 '모델이 값을 모름'.
+        //  3분이 아니라 5분인 이유: 문자·메일로 오는 인증 코드를 기다려야 할 수 있다.
+        const val CRED_TIMEOUT_MIN = 5L
+        const val CRED_DONE = 0   // 사용자가 직접 입력을 마침 → 이어서 진행
+        const val CRED_STOP = 1   // 사용자가 중단을 선택
     }
 
     override fun onUnbind(intent: Intent?): Boolean{
@@ -392,6 +399,123 @@ class a11service : AccessibilityService(), Executor {
         return choice
     }
 
+    /** 사용자에게 입력을 넘기고, 그 결과를 모델에게 보고할 status 로 돌려준다.
+     *
+     *  ★ 절대 `{"status":"ok"}` 로 두지 말 것 — `type` 을 실행하지 않았는데 ok 를 주면 모델은
+     *  자기가 친 값이 들어갔다고 믿고 다음 단계로 넘어간다. press_key 에서 똑같이 당해
+     *  4턴을 날린 적이 있다(1620808). 무슨 일이 있었는지 말로 알려주고, 실행 후 화면은
+     *  runAgent 가 다시 찍어 함께 보내므로 모델이 눈으로 확인한다.
+     *
+     *  값 자체는 우리 손을 거치지 않는다 — 사용자가 뒤 앱의 진짜 키보드로 직접 친다.
+     *  그래서 run_history.txt 에도 남지 않는다.
+     */
+    private fun credentialHandover(reason: String): JSONObject {
+        if (showCredentialCard(reason) == CRED_STOP) {
+            // 확인 카드의 '거부'와 같은 취급 — 여기서 끝낸다. dispatch 는 '루프를 끝내라'를
+            // 직접 말할 수단이 없으므로 취소 깃발을 세우고, runAgent 가 다음 턴에서 확인한다.
+            requestCancel()
+            throw IllegalStateException(
+                "The device owner declined to enter the value. Stop and report that the task " +
+                "cannot continue without their input.")
+        }
+        return JSONObject()
+            .put("status", "user_entered")
+            .put("message",
+                "The device owner typed the value themselves; you never see it. " +
+                "Do not type into this field. Read the screenshot and continue from there.")
+    }
+
+    /** 자격증명 입력 카드. 인계 카드와 터치 정책이 같다 — 사용자가 **뒤 앱의 키보드**를 써야 한다.
+     *
+     *  FLAG_NOT_FOCUSABLE 이 특히 중요하다: 이 창이 포커스를 가져가면 뒤 앱의 입력칸이 포커스를
+     *  잃어 키보드가 내려간다. 그러면 정작 입력을 못 한다.
+     *
+     *  [그냥 계속] 같은 선택지는 일부러 없다 — 여기서 '계속'은 모델이 지어낸 값을 비밀번호 칸에
+     *  넣으라는 뜻이 되기 때문이다. 검은 화면 카드의 [그냥 계속]과는 성격이 다르다.
+     */
+    private fun showCredentialCard(reason: String): Int {
+        if (!Settings.canDrawOverlays(this)) return CRED_STOP   // 물어볼 수 없으면 진행하지 않는다
+        val latch = CountDownLatch(1)
+        var choice = CRED_STOP
+        var root: View? = null
+        pendingLatch = latch                     // 중단 버튼이 이 대기를 깨울 수 있게
+        ui.post {
+            val wm = getSystemService(WindowManager::class.java)
+            val d = resources.displayMetrics.density
+            fun dp(v: Int) = (v * d).toInt()
+
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(24).toFloat(); setColor(0xFF1E1F24.toInt())
+                }
+                setPadding(dp(20), dp(18), dp(20), dp(16))
+                elevation = dp(16).toFloat()
+            }
+            val title = TextView(this).apply {
+                text = "🔐 직접 입력해 주세요"
+                setTextColor(0xFFF2F3F5.toInt()); textSize = 17f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            }
+            // 모델이 준 reason 을 그대로 쓴다. 화면 언어에 맞춰 한국어로 오고, 무엇을 왜 입력해야
+            // 하는지가 상황마다 다르므로 우리가 문구를 지어내는 것보다 정확하다.
+            val body = TextView(this).apply {
+                text = "$reason\n\n입력을 마친 뒤 [입력했어요]를 눌러 주세요."
+                setTextColor(0xFFAAB0BA.toInt()); textSize = 13f
+                setLineSpacing(dp(3).toFloat(), 1f)
+                setPadding(0, dp(6), 0, dp(16))
+            }
+            fun pill(label: String, textColor: Int, bg: Int, border: Boolean) = TextView(this).apply {
+                text = label; setTextColor(textColor); textSize = 13f
+                gravity = Gravity.CENTER; isClickable = true
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, dp(12), 0, dp(12))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat(); setColor(bg)
+                    if (border) setStroke(dp(1), 0xFF3A3B42.toInt())
+                }
+            }
+            val done = pill("입력했어요", 0xFFFFFFFF.toInt(), 0xFF3B82F6.toInt(), false)
+            val stop = pill("중단", 0xFFC9CDD4.toInt(), 0x00000000, true)
+
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(done, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
+            row.addView(stop, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { marginStart = dp(8) })
+
+            card.addView(title); card.addView(body); card.addView(row)
+
+            fun close(res: Int) {
+                choice = res
+                root?.let { wm.removeViewImmediate(it) }   // 카드가 남으면 재캡처에 찍힌다
+                root = null; pendingLatch = null; latch.countDown()
+            }
+            done.setOnClickListener { close(CRED_DONE) }
+            stop.setOnClickListener { close(CRED_STOP) }
+
+            val lp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or       // 뒤 앱이 입력 포커스를 유지
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,   // 카드 밖 터치는 뒤 앱(키보드)으로
+                PixelFormat.TRANSLUCENT
+            )
+            lp.gravity = Gravity.TOP        // 키보드는 아래에 뜨므로 카드는 위로
+            lp.y = dp(24)
+            root = card
+            wm.addView(card, lp)
+        }
+        val answered = latch.await(CRED_TIMEOUT_MIN, TimeUnit.MINUTES)
+        pendingLatch = null
+        if (!answered) {
+            ui.post { root?.let { getSystemService(WindowManager::class.java).removeViewImmediate(it) } }
+            return CRED_STOP
+        }
+        Thread.sleep(150)   // 창이 실제로 사라질 시간. 이 뒤라야 재캡처가 깨끗하다.
+        return choice
+    }
+
     /** 지정한 세로 구간에서 순수 #000000 픽셀의 비율. 디코딩 실패면 -1. */
     private fun blackPercentOf(png: ByteArray, topFrac: Double, botFrac: Double): Int {
         val opt = BitmapFactory.Options().apply { inSampleSize = 8 }   // 축소 디코딩
@@ -462,7 +586,22 @@ class a11service : AccessibilityService(), Executor {
             "drag_and_drop" -> swipeBlocking(
                 pxX(args.getInt("start_x"), w).toFloat(), pxY(args.getInt("start_y"), h).toFloat(),
                 pxX(args.getInt("end_x"), w).toFloat(),   pxY(args.getInt("end_y"), h).toFloat(), 300)
-            "type" -> { setText(args.getString("text")); if (args.optBoolean("press_enter", false)) imeEnter() }
+            // ★ 자체 안전 게이트(액션 기반) — 비밀번호 칸에는 우리가 절대 쓰지 않는다.
+            //   '화면이 로그인 화면인가'를 판정하지 않는 게 핵심이다. 그건 회원가입 폼·비밀번호
+            //   변경 화면·로그인 폼이 일부만 있는 페이지에서 전부 오탐이 난다. 대신 '지금 쓰려는
+            //   그 칸이 비밀 값인가'만 본다 — 화면을 스쳐 지나갈 때는 아예 걸리지 않는다.
+            //
+            //   목표 문장에 비밀번호가 적혀 있어도 막는다. 예외를 열면 (a) 모델이 진짜 비밀번호를
+            //   자기 추측값으로 덮어쓸 수 있고 (b) 앱이 자격증명을 쥐는 순간이 생긴다.
+            "type" -> {
+                if (focusedIsPassword()) return credentialHandover("비밀번호는 직접 입력해 주세요.")
+                setText(args.getString("text")); if (args.optBoolean("press_enter", false)) imeEnter()
+            }
+            // 모델이 '내가 모르는 값을 요구받았다'고 스스로 알릴 때 부르는 통로(CuClient.REQUEST_USER_INPUT).
+            // 인증번호처럼 노드에 아무 표식이 없는 경우(실측: isPassword·resource-id·content-desc 모두 빔)는
+            // 코드가 알아낼 방법이 없어 이 경로가 유일한 수단이다. 근거는 CLAUDE.md Gotchas.
+            "request_user_input" -> return credentialHandover(
+                args.optString("reason").ifBlank { "직접 입력이 필요한 값이 있습니다." })
             "press_key" -> when (val k = args.optString("key").lowercase()) {
                 "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
                 "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
@@ -719,6 +858,28 @@ private fun dispatchBlocking(gesture:GestureDescription){
         val stroke = GestureDescription.StrokeDescription(path,0,durMs)
         dispatchBlocking(GestureDescription.Builder().addStroke(stroke).build())
     }
+
+    /** 지금 입력 포커스를 가진 칸이 '가려지는 비밀 값'인가.
+     *
+     *  isPassword 는 우리가 추측하는 값이 아니라 **앱이 스스로 붙인 표식**이다
+     *  (`inputType="textPassword"`, 웹이면 `<input type="password">`). 근거가 앱 자신의
+     *  선언이라 오탐이 구조적으로 거의 없다. 웹뷰에서도 그대로 올라온다(네이버 로그인 실측).
+     *
+     *  ⚠ CLAUDE.md 의 "isPassword 는 판별력이 없다(카톡·토스 0개)" 표를 근거로 이 함수를
+     *  지우지 말 것. 그건 **커스텀 키패드 잠금화면** 얘기다 — 거긴 EditText 자체가 없다.
+     *  표준 로그인 폼은 상황이 다르고, 그쪽은 검은 화면 인계가 따로 맡는다.
+     *
+     *  반대로 이 신호의 사정거리도 딱 여기까지다: 인증번호 칸은 화면에 숫자가 보여야 해서
+     *  앱이 마스킹하지 않으므로 false 다. 그 경우는 모델이 request_user_input 으로 알린다.
+     */
+    private fun focusedIsPassword(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        return node.isPassword
+    }
+
+    /** 로그 마스킹용(Executor). 판정 자체는 focusedIsPassword 와 같은 것을 본다. */
+    override fun isSecretFieldFocused(): Boolean = focusedIsPassword()
 
     private fun setText(text : String){
         val root = rootInActiveWindow ?:return

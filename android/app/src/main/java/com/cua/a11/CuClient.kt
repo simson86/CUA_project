@@ -35,6 +35,39 @@ class CuClient(private val apiKey : String,
             MODELS.indexOf(value).takeIf { it >= 0 } ?: MODELS.indexOf(DEFAULT_MODEL)
         fun thinkingIndex(value: String?): Int =
             THINKING.indexOf(value).takeIf { it >= 0 } ?: THINKING.indexOf(DEFAULT_THINKING)
+
+        /** 모델이 '요구받은 값을 내가 모른다'고 알리는 통로. computer_use 와 나란히 선언한다.
+         *
+         *  왜 필요한가: 인증번호 칸은 코드가 볼 수 있는 표식이 하나도 없다(실측 2026-08-12 —
+         *  isPassword=false, resource-id·content-desc 모두 빈 문자열). 게다가 '그 값을 아는가'는
+         *  화면이 아니라 **대화 맥락**에 있는 정보라 원리적으로 노드로는 못 푼다. 화면이 똑같아도
+         *  목표가 "아이디 abc로 로그인"이면 입력해야 하고 "로그인해줘"면 물어봐야 한다.
+         *
+         *  ★ 형식은 '평면' — {type, name, description, parameters} 를 tools 원소에 바로 편다.
+         *  실측(2026-08-12): 중첩 {type:"function", function:{…}} 은 400 `Unknown parameter
+         *  'function'`, {function_declarations:[…]} 은 400 `'type' is required`. 평면만 200.
+         *  thinking_level·safety_acknowledgement 와 정확히 같은 구도다 — 문서/SDK 형식을 근거로
+         *  중첩으로 "고치면" 400 이 된다. CLAUDE.md Gotchas 참조.
+         *
+         *  ⚠ 이 선언만으로는 모델이 부르지 않는다. system_prompt 의 '추측하지 말고 이걸 불러라'
+         *  규칙이 있어야 작동한다(실측: 규칙 없음 0/5, 있음 10/15). 둘은 한 쌍이다.
+         */
+        fun requestUserInputTool(): JSONObject = JSONObject()
+            .put("type", "function")
+            .put("name", "request_user_input")
+            .put("description",
+                "Ask the device owner to type a value you cannot know, such as a password or a " +
+                "one-time verification code sent by SMS or email. The owner types it directly on " +
+                "the keyboard; you never see the value. Use this instead of guessing.")
+            .put("parameters", JSONObject()
+                .put("type", "object")
+                .put("properties", JSONObject()
+                    .put("reason", JSONObject()
+                        .put("type", "string")
+                        .put("description",
+                            "What the owner must enter and why, in the language shown on screen. " +
+                            "This text is displayed to them verbatim.")))
+                .put("required", JSONArray().put("reason")))
     }
 
     // ── 이번 실행에 쓸 설정 ────────────────────────────────────
@@ -113,8 +146,11 @@ class CuClient(private val apiKey : String,
         * Deleting, sending, purchasing, granting permissions, and accepting terms cannot
           be undone. Do only what the goal clearly asks for — never take such an action to
           explore or to see what happens.
-        * Never attempt to enter a password, PIN, pattern, or biometric prompt, and never
-          guess one. Take no action and report that user authentication is required.
+        * Never guess a password, PIN, pattern, or verification code, and never type a value
+          you were not given. When a field needs a value you do not have, call
+          `request_user_input` with a short reason instead of typing. The owner enters it
+          themselves, and you continue from the next screenshot — this is not a failure and
+          not a reason to stop.
     """.trimIndent()
 
     // ── 작업 유형별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ────────────────
@@ -190,8 +226,9 @@ class CuClient(private val apiKey : String,
             .put("model", model)
             .put("input", input)
             .put("system_instruction", system_prompt)
-            .put("tools", JSONArray().put(JSONObject()
-                .put("type", "computer_use").put("environment", "mobile")))
+            .put("tools", JSONArray()
+                .put(JSONObject().put("type", "computer_use").put("environment", "mobile"))
+                .put(requestUserInputTool()))
         if (prevId != null) body.put("previous_interaction_id", prevId)  // 턴2+에서만
         // 사고수준은 이제 항상 보낸다(앱에서 4종 중 하나를 반드시 고르므로 '미지정'이 없다).
         // 형식은 '평면 + 소문자' — SDK 형식(generation_config.thinking_config 중첩)은 이 엔드포인트에서
@@ -250,6 +287,10 @@ interface Executor {
 
     /** 지금 화면에 떠 있는 앱에만 해당하는 참고사항(없으면 null). 구현은 a11service.appNotes 참조. */
     fun appNote(): String? = null
+
+    /** 지금 입력 포커스가 비밀 값 칸인가. **로그 마스킹 전용**이며 실행 흐름을 바꾸지 않는다.
+     *  기본 false — 소켓 경로나 다른 구현체는 종전대로 동작한다. */
+    fun isSecretFieldFocused(): Boolean = false
 }
 
 // 목표를 완료까지 자율 실행. 좌표는 안 만짐 — 환산은 exec.dispatch 내부에서.
@@ -280,7 +321,10 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
             val name = c.optString("name")
             val callId = c.optString("id")
             val args = c.optJSONObject("arguments") ?: JSONObject()
-            emit("[턴 $turn] $name {${fmtArgs(args)}}")
+            // 로그는 dispatch 보다 먼저 찍히므로, 게이트가 막아도 모델이 넣으려던 문자열은
+            // run_history.txt 에 남는다. 비밀번호 칸을 향한 값이면 여기서 가린다.
+            val mask = name == "type" && exec.isSecretFieldFocused()
+            emit("[턴 $turn] $name {${fmtArgs(args, mask)}}")
 
             // ── 안전 확인(HITL): 위험 액션은 '실행 전'에 사용자 승인 ──
             // safety_decision 위치가 스펙(arguments 안)과 실제(스텝 형제 필드)가 다를 수 있어 둘 다 본다.
@@ -322,11 +366,13 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
     return "STOP: max turns"
 }
 
-private fun fmtArgs(o: JSONObject): String {
+private fun fmtArgs(o: JSONObject, maskText: Boolean = false): String {
     val order = listOf("x", "y", "start_x", "start_y", "end_x", "end_y",
-        "text", "press_enter", "key", "package_name", "app_name","intent", "seconds")
+        "text", "press_enter", "key", "package_name", "app_name","intent", "seconds", "reason")
     val known = order.filter { o.has(it) }
     val rest = o.keys().asSequence().filter { it !in order }.sorted().toList()
-    return (known + rest).joinToString(", ") { "$it=${o.get(it)}" }
+    return (known + rest).joinToString(", ") {
+        if (maskText && it == "text") "text=***" else "$it=${o.get(it)}"
+    }
 }
 
