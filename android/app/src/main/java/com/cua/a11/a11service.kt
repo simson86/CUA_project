@@ -76,7 +76,12 @@ class a11service : AccessibilityService(), Executor {
         super.onDestroy()
     }
     @Volatile private var cancelled = false
-    fun requestCancel() { cancelled = true }
+    // 카드가 떠 있는 동안 에이전트 스레드는 latch 앞에서 자고 있어 cancel 깃발을 확인할 코드가
+    // 돌지 않는다. 중단 버튼이 그 대기까지 깨워야 '눌러도 반응 없음'이 안 생긴다.
+    @Volatile private var pendingLatch: CountDownLatch? = null
+    // 사용자가 "그냥 계속"을 고른 앱. 실행마다 초기화한다(runTask).
+    private val skipBlackPkgs = java.util.Collections.synchronizedSet(HashSet<String>())
+    fun requestCancel() { cancelled = true; pendingLatch?.countDown() }
     // ★ log 는 반드시 맨 뒤 — MainActivity 가 trailing lambda 로 넘긴다.
     //   중간에 파라미터를 끼우면 `svc.runTask(task, maxTurns, model, thinking) { … }` 문법이 깨진다.
     // ★ 새 파라미터엔 기본값을 준다 — 소켓 RUN 경로와 기존 호출부가 안 깨지게.
@@ -87,6 +92,7 @@ class a11service : AccessibilityService(), Executor {
         // 지난 실행에서 중단 버튼이 눌렸으면 cancelled 가 true 로 남아 있다.
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
         cancelled = false
+        skipBlackPkgs.clear()      // "그냥 계속" 판단은 이번 실행에만 유효하다
         cu.model = model                     // 이번 판에 쓸 설정을 갈아끼운다
         cu.thinkingLevel = thinking
         // 이 줄을 빼지 말 것 — 설정을 바꿀 수 있게 만든 순간, '어떤 설정이 어떤 결과를 냈는지'가
