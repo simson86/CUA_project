@@ -1,6 +1,6 @@
 # 5단계 — 폰 단독(온디바이스) CU 호출: PC 떼기 시작 (①번 방향)
 
-> 로컬 전용 문서(.gitignore `hybrid-step*`). 코드는 **네가 직접** 타이핑한다([[user-writes-code-himself]]).
+> 코드는 **네가 직접** 타이핑한다([[user-writes-code-himself]]).
 > 앞 단계: step4(제스처)까지 = ②하이브리드 완성(폰=눈+손, PC=두뇌). 이번부터 **두뇌도 폰으로**.
 
 ---

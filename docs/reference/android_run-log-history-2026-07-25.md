@@ -1,6 +1,6 @@
 # 로그 저장 + 지난 로그 다시 보기
 
-> 로컬 전용(.gitignore `hybrid-*`). `hybrid-inapp-log.md`(실시간 로그)의 후속.
+> `android_run-inapp-log-2026-07-29.md`(실시간 로그)의 후속.
 > 실행이 끝나면 로그를 **파일에 저장** → 나중에 앱에서 "지난 로그 보기"로 다시 확인.
 
 ---
@@ -53,7 +53,7 @@ Done turn=3 : 설정 열었습니다.
     </LinearLayout>
 ```
 
-> `logScroll`/`logView`(실시간 로그 영역)는 `hybrid-inapp-log.md` §4대로 이미 있다고 가정.
+> `logScroll`/`logView`(실시간 로그 영역)는 `android_run-inapp-log-2026-07-29.md` §4대로 이미 있다고 가정.
 
 ---
 
@@ -101,7 +101,7 @@ import java.util.Locale
 
 ### 2-d. 실행 블록 — 로그를 모아서 끝나면 저장
 
-`hybrid-inapp-log.md` §3-c의 thread 블록을 이렇게 교체:
+`android_run-inapp-log-2026-07-29.md` §3-c의 thread 블록을 이렇게 교체:
 ```kotlin
             runBtn.isEnabled = false
             logView.text = ""

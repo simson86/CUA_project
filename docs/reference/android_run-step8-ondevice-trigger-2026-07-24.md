@@ -1,6 +1,6 @@
 # step8 — 온디바이스 트리거 (소켓/PC 없이 폰에서 직접 실행)
 
-> 로컬 전용(.gitignore `hybrid-*`). ①번(폰 단독)의 **마지막 조각**.
+> ①번(폰 단독)의 **마지막 조각**.
 > 지금까진 PC가 `RUN`을 소켓으로 쏴야 시작됐음 → 이제 **폰 화면의 입력창+버튼**으로 시작.
 > 이게 되면 "PC 없어도 폰 혼자 돈다"가 코드로도 성립.
 
@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
 | 재설치 후 첫 실행이 null | 접근성 토글이 꺼짐 → 다시 켜기(정상 동작) |
 | 결과창에 `오류: NetworkOnMainThread...` | 위와 동일 — 스레드 확인 |
 | 화면 안 바뀌는데 Done | dispatch가 조용히 실패 → Logcat `a11cu`에서 `dispatch실패` 확인, 접근성 `canPerformGestures` 확인 |
-| ⚠️ 결제/구매/전송 | 여전히 **자동승인** 상태 — 위험작업 금지. `hybrid-todo-safety-confirm.md` 참고 |
+| ⚠️ 결제/구매/전송 | 여전히 **자동승인** 상태 — 위험작업 금지. `android_run-todo-safety-confirm-2026-08-03.md` 참고 |
 
 ---
 
@@ -232,4 +232,4 @@ class MainActivity : AppCompatActivity() {
 
 - 이걸로 **①번(폰 단독) 기능 100%**: 화면캡처·판단(Gemini)·실행·트리거 전부 폰 안.
 - PC(send.py/소켓)는 이제 **선택적 디버깅 채널**일 뿐.
-- 다음 후보: 안전확인 다이얼로그(`hybrid-todo-safety-confirm.md`), list_apps 서드파티 필터, §4 소켓 제거.
+- 다음 후보: 안전확인 다이얼로그(`android_run-todo-safety-confirm-2026-08-03.md`), list_apps 서드파티 필터, §4 소켓 제거.

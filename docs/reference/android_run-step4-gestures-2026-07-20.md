@@ -6,7 +6,6 @@
 > ② 폰 프로토콜에 **실제 동작**(TAP/SWIPE/TEXT/BACK…) 추가,
 > ③ PC `A11yBridge`의 액션 메서드를 no-op → 진짜 소켓 명령으로 채움,
 > ④ `main.py`가 **환경변수로 ADB/A11y 선택**하게 하고 repo에 정식 커밋.
->
 > 형식: 완성 코드 + 줄별 설명 주석(직접 옮겨 적으며 이해). 로드맵: `accessibility-migration-guide.md`.
 
 결정(2026-07-20): 앱=새 정식 프로젝트(`Android_run`, 클래스 `a11service`), PC 코드=repo 정식 커밋, 오늘=바로 4단계.
@@ -359,7 +358,7 @@ import os   # 이미 있으면 생략
 - **후속 개선(방식 B, 나중):** 폰이 UDP로 자기 IP를 방송 → PC가 자동 탐색해 `PHONE_IP` 없이도 붙게. 파이프 검증 후 편의 기능으로 추가 예정.
 
 **커밋(결정 2):** `live/a11y_bridge.py`(신규) + `live/main.py`(선택 로직) 을 baseline에 커밋.
-step 문서(`hybrid-step*.md`)는 `.gitignore`라 로컬 유지.
+step 문서는 2026-08-13부터 깃으로 공유한다(파일명 끝의 날짜 = 작성일).
 
 ---
 

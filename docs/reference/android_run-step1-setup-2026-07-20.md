@@ -2,7 +2,6 @@
 
 > 목표(1단계): **빈 앱이 폰에서 실행됨 → 접근성 서비스로 등록·켜짐 → `takeScreenshot`으로 화면 한 장 잡아 PNG 크기를 Logcat에 찍음.**
 > 여기서 막히면 하이브리드 전체가 막히므로 첫 관문. 스펙은 [`android-accessibility.md`](android-accessibility.md), 메서드 매핑은 [`accessibility-migration-guide.md`](accessibility-migration-guide.md).
->
 > ⚠️ **코드는 뼈대·`// TODO(나)`만.** 직접 채우며 배우는 게 이 프로젝트 목적.
 
 ---

@@ -1,8 +1,7 @@
 # 하이브리드 2단계 — 폰의 화면(PNG)을 소켓으로 PC에 전송
 
-> 1단계(`hybrid-step1-setup.md`)에서 폰이 스스로 화면을 캡처(`takeScreenshot`→PNG)하는 걸 검증했다.
+> 1단계(`android_run-step1-setup-2026-07-20.md`)에서 폰이 스스로 화면을 캡처(`takeScreenshot`→PNG)하는 걸 검증했다.
 > 2단계 목표: 그 PNG를 **소켓으로 PC에 보내기**. 하이브리드의 "폰↔PC 연결" 부분.
->
 > 형식: **완성 코드 + 줄별 설명 주석**. 직접 옮겨 적으며 이해하는 방식(빈칸/TODO 아님).
 > 전체 로드맵은 `accessibility-migration-guide.md` §4.
 

@@ -3,7 +3,6 @@
 > 2단계에서 "폰에 SHOT → PNG 수신"이 됐다. 3단계 목표: 그 소켓 로직을
 > **`ADBBridge`와 똑같은 계약**을 가진 `A11yBridge` 클래스로 감싸서,
 > `main.py`에서 **한 줄 교체**로 CU 루프를 1턴 돌린다(액션은 아직 no-op).
->
 > 형식: 완성 코드 + 설명 주석. 로드맵: `accessibility-migration-guide.md` §4~5.
 
 ---
