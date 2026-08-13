@@ -30,8 +30,10 @@ git_report*.html
 예약_*.txt
 *.pptx
 
-# ── 로컬 전용 문서(깃 공유 안 함) ──
-docs/reference/android_run-*.md
+# docs/reference/ 는 전부 공유한다(2026-08-13).
+# 예전엔 android_run-*.md 를 로컬 전용으로 뒀는데, 구현 배경·실측 수치·함정이 거기
+# 쌓이면서 팀원이 못 보는 게 손해가 됐다. 새 문서도 그냥 여기 두면 공유된다.
+# ★ 넣기 전에 비밀이 섞이지 않았는지 볼 것 — API 키는 값 대신 `GEMINI_API_KEY=…` 로.
 
 # ── 로컬 IDE/도구 설정 ──
 .claude/settings.local.json
