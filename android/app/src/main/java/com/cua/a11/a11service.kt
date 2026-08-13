@@ -211,7 +211,7 @@ class a11service : AccessibilityService(), Executor {
         ui.post { tv.visibility = View.VISIBLE }
     }
 
-    // 모델·사고수준은 앱 드롭다운에서 매 실행 고른다(문서: android_run-model-thinking.md).
+    // 모델·사고수준은 앱 드롭다운에서 매 실행 고른다(문서: android_run-model-thinking-2026-08-11.md).
     // 그래서 여기 BuildConfig 값은 '씨앗'일 뿐이다 — 드롭다운의 첫 기본 선택이자, 소켓 RUN 처럼
     // runTask 를 안 거치는 경로가 쓸 초기값. 비었거나 오타면 CuClient 가 기본값으로 떨군다.
     private val cu by lazy {

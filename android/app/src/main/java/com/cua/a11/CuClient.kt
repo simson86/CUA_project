@@ -234,7 +234,7 @@ class CuClient(private val apiKey : String,
         if (prevId != null) body.put("previous_interaction_id", prevId)  // 턴2+에서만
         // 사고수준은 이제 항상 보낸다(앱에서 4종 중 하나를 반드시 고르므로 '미지정'이 없다).
         // 형식은 '평면 + 소문자' — SDK 형식(generation_config.thinking_config 중첩)은 이 엔드포인트에서
-        // 400 이다. 실측표는 docs/reference/android_run-model-thinking.md §0. 문서를 근거로 되돌리지 말 것.
+        // 400 이다. 실측표는 docs/reference/android_run-model-thinking-2026-08-11.md §0. 문서를 근거로 되돌리지 말 것.
         body.put("generation_config", JSONObject().put("thinking_level", thinkingLevel))
 
         val req = Request.Builder()
