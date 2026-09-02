@@ -272,10 +272,19 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onStop() {
         super.onStop()
+        // ★ 끊었으면 화면에도 남겨야 한다. 타이머만 죽이면 마지막 틱("1초 뒤 실행합니다 — …")이
+        //   그대로 얼어붙어, 돌아온 사용자는 곧 실행되는 줄 안다. 실제로는 이미 취소된 상태다.
+        //   조건을 다는 이유: 실행 중에 홈으로 나갔다 오는 경우까지 이 문구가 덮으면
+        //   "실행 중…"이나 실행 결과가 지워진다. 정말 뭔가를 취소했을 때만 쓴다.
+        val cancelledSomething = countdown != null || voice?.isListening == true
         countdown?.cancel()
         countdown = null
         findViewById<Button>(R.id.cancelBtn)?.visibility = View.GONE
         voice?.cancel()
+        if (cancelledSomething) {
+            findViewById<TextView>(R.id.resultView)?.text =
+                "앱을 벗어나 자동 실행이 취소되었습니다.\n그대로 실행하려면 ‘실행’을 누르세요."
+        }
     }
 
     /** SpeechRecognizer 는 destroy 하지 않으면 인식 서비스 바인딩이 남는다. */
