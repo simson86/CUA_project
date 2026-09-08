@@ -103,8 +103,10 @@ class a11service : AccessibilityService(), Executor {
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
         cancelled = false
         skipBlackPkgs.clear()      // "그냥 계속" 판단은 이번 실행에만 유효하다
-        cu.model = model                     // 이번 판에 쓸 설정을 갈아끼운다
-        cu.thinkingLevel = thinking
+        // 이번 판에 쓸 설정을 갈아끼운다. 따로 대입하지 말 것 — 사고수준이 이 모델에서
+        // 유효한지는 '조합'을 봐야 알 수 있고(3.7·3.8 은 minimal 을 400 으로 거절한다),
+        // 그 판단은 configure 안에 한 번만 둔다.
+        cu.configure(model, thinking)
         // 이 줄을 빼지 말 것 — 설정을 바꿀 수 있게 만든 순간, '어떤 설정이 어떤 결과를 냈는지'가
         // 기록에 안 남는 게 가장 큰 손해다. run_history.txt 에 남는 유일한 증거다.
         log("[설정] ${cu.settingsLine()} maxTurns=$maxTurns")

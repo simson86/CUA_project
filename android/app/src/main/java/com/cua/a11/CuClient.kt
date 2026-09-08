@@ -10,20 +10,45 @@ import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 class CuClient(private val apiKey : String,
-               model: String = DEFAULT_MODEL,
-               thinking: String = DEFAULT_THINKING,) {
+               seedModel: String = DEFAULT_MODEL,
+               seedThinking: String = DEFAULT_THINKING,) {
     companion object{
         /** 앱 드롭다운에 뜨는 모델 후보. 새 모델이 나오면 **여기 한 줄** 추가하면 앱에 뜬다.
          *  자유 입력(EditText)을 안 쓰는 이유: 모델명 오타는 첫 cuCall 에서 HTTP 400 이고,
          *  화면엔 `오류: HTTP 400: …` 으로만 보인다. 목록에서 고르면 그 실패가 아예 안 생긴다. */
-        val MODELS = listOf("gemini-3.5-flash", "gemini-3.6-flash")
-        /** 저장값·빌드값이 없거나 목록에 없을 때 쓸 모델. */
+        val MODELS = listOf("gemini-3.5-flash", "gemini-3.6-flash",
+                            "gemini-3.7-flash", "gemini-3.8-flash")
+        /** 저장값·빌드값이 없거나 목록에 없을 때 쓸 모델.
+         *  ★ 실측 없이 최신 모델로 올리지 말 것 — 3.7·3.8 은 "API 가 받아준다"까지만 확인됐고
+         *    (2026-09-08) 실기기 턴 수·정확도 비교는 아직 안 했다. 이 프로젝트에서 속도는
+         *    한 턴의 토큰이 아니라 **총 턴 수**라서, 그건 폰에서 재야만 안다. */
         const val DEFAULT_MODEL = "gemini-3.5-flash"
 
-        /** 앱 드롭다운에 뜨는 사고수준 4종. REST 가 받는 값 그대로(평면 + **소문자**, §0). */
+        /** 사고수준 후보 **전체**. REST 가 받는 값 그대로(평면 + **소문자**, §0).
+         *  ★ 이 목록을 그대로 드롭다운에 쓰면 안 된다 — 모델마다 받는 값이 다르다(thinkingFor). */
         val THINKING = listOf("minimal", "low", "medium", "high")
-        /** 저장값·빌드값이 없거나 목록에 없을 때 쓸 값. 실측 권장치(멀티턴 턴 수 최소). */
+        /** 저장값·빌드값이 없거나 목록에 없을 때 쓸 값. 실측 권장치(멀티턴 턴 수 최소).
+         *  ★ **모든 모델이 받는 값**이어야 한다 — thinkingFor 가 걸러낸 뒤의 대체값이 이것이다. */
         const val DEFAULT_THINKING = "low"
+
+        /** 그 모델이 **거절하는** 사고수준. 실측 2026-09-08 (computer_use 동반 호출, 4×4 전수):
+         *  3.7·3.8 에 `minimal` → 400 `'minimal' is not a supported thinking level for this
+         *  model. Allowed values are: medium, low, high.` low/medium/high 는 셋 다 200.
+         *  3.5·3.6 은 4종 전부 200 이고 `minimal` 에서 total_thought_tokens=0 이 나온다.
+         *
+         *  ★ '허용 목록'이 아니라 '거절 목록'인 이유: 여기 없는 모델은 전체 허용으로 떨어진다.
+         *  허용 목록이면 새 모델을 MODELS 에만 넣었을 때 사고수준이 **하나도** 안 뜬다 —
+         *  "새 모델은 한 줄" 원칙이 깨지는 쪽으로 실패한다. 이쪽은 기존 동작으로 실패한다. */
+        private val THINKING_UNSUPPORTED = mapOf(
+            "gemini-3.7-flash" to setOf("minimal"),
+            "gemini-3.8-flash" to setOf("minimal"),
+        )
+
+        /** [model] 에서 실제로 고를 수 있는 사고수준. 드롭다운 목록이자 검증 기준이다. */
+        fun thinkingFor(model: String?): List<String> {
+            val no = THINKING_UNSUPPORTED[model] ?: return THINKING
+            return THINKING.filter { it !in no }
+        }
 
         /** [value] 가 목록의 몇 번째인지. 모르는 값이면 기본값 자리.
          *
@@ -33,8 +58,14 @@ class CuClient(private val apiKey : String,
          *  실제로 탄다. `setSelection(-1)` 로 인한 IndexOutOfBounds 도 여기서 같이 막는다. */
         fun modelIndex(value: String?): Int =
             MODELS.indexOf(value).takeIf { it >= 0 } ?: MODELS.indexOf(DEFAULT_MODEL)
-        fun thinkingIndex(value: String?): Int =
-            THINKING.indexOf(value).takeIf { it >= 0 } ?: THINKING.indexOf(DEFAULT_THINKING)
+        /** ★ [list] 를 인자로 받는 이유: 사고수준 목록이 이제 **모델마다 다르다**(thinkingFor).
+         *  THINKING 전체를 기준으로 인덱스를 내면 minimal 이 빠진 3.7·3.8 에서 한 칸씩 밀려
+         *  사용자가 고른 것과 다른 값이 뜬다. 마지막 `?: 0` 은 DEFAULT_THINKING 조차 목록에
+         *  없을 때의 IndexOutOfBounds 방어다(지금은 안 타지만, 목록이 동적이라 남겨 둔다). */
+        fun thinkingIndex(list: List<String>, value: String?): Int =
+            list.indexOf(value).takeIf { it >= 0 }
+                ?: list.indexOf(DEFAULT_THINKING).takeIf { it >= 0 }
+                ?: 0
 
         /** 모델이 '요구받은 값을 내가 모른다'고 알리는 통로. computer_use 와 나란히 선언한다.
          *
@@ -81,10 +112,24 @@ class CuClient(private val apiKey : String,
     //  생성자 인자는 '씨앗'일 뿐이다 — local.properties 의 GEMINI_MODEL/GEMINI_THINKING 이
     //  드롭다운의 첫 기본 선택을 정한다. 비었거나 모르는 값이면 여기서 조용히 기본값으로 떨어진다.
     //  기본값을 build.gradle.kts 가 아니라 이 클래스에서 채우는 이유는 §3 참조(출처를 한 곳으로).
-    @Volatile var model: String =
-        if (model in MODELS) model else DEFAULT_MODEL
-    @Volatile var thinkingLevel: String =
-        if (thinking in THINKING) thinking else DEFAULT_THINKING
+    //  ★ 대입은 configure 로만 한다(`private set`). 둘을 따로 대입하면 **조합**을 검증할
+    //  곳이 없어진다 — model=3.8 + thinkingLevel=minimal 은 각각은 멀쩡한 값인데 합치면
+    //  첫 cuCall 에서 HTTP 400 이고, 액션 하나 못 해보고 실행이 죽는다(실측 2026-09-08).
+    //  드롭다운이 이미 걸러 주지만 그건 UI 한 겹일 뿐이고, 소켓 RUN·오래된 저장값처럼
+    //  UI 를 안 거치는 경로가 실제로 있다. 제약을 아는 이 클래스가 마지막 방어선이다.
+    @Volatile var model: String = DEFAULT_MODEL
+        private set
+    @Volatile var thinkingLevel: String = DEFAULT_THINKING
+        private set
+
+    /** 이번 판에 쓸 설정. 모르는 값이나 **이 모델이 못 받는 사고수준**은 기본값으로 떨군다. */
+    fun configure(model: String, thinking: String) {
+        val m = if (model in MODELS) model else DEFAULT_MODEL
+        this.model = m
+        this.thinkingLevel = if (thinking in thinkingFor(m)) thinking else DEFAULT_THINKING
+    }
+
+    init { configure(seedModel, seedThinking) }
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
