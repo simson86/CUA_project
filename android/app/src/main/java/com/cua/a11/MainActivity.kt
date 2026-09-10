@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.CountDownTimer
 import android.provider.Settings
 import android.view.View
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -46,21 +47,41 @@ class MainActivity : AppCompatActivity() {
         val turnsInput = findViewById<EditText>(R.id.maxTurnsInput)
         turnsInput.setText(prefs.getInt("max_turns", 20).toString())
 
-        // 모델·사고수준 드롭다운 — 값 목록은 CuClient.MODELS / CuClient.THINKING 이 유일한 출처다.
+        // 모델·사고수준 드롭다운 — 값 목록은 CuClient.MODELS / CuClient.thinkingFor 가 유일한 출처다.
         // 우선순위: 저장값(SharedPreferences) > 빌드값(local.properties) > CuClient 기본값.
         // 목록에 없는 값이 저장돼 있으면 modelIndex/thinkingIndex 가 기본값 자리로 떨궈 준다
         // (setSelection(-1) → selectedItemPosition == -1 → IndexOutOfBounds 방지).
         val modelSpinner = findViewById<Spinner>(R.id.modelSpinner)
+        val thinkSpinner = findViewById<Spinner>(R.id.thinkingSpinner)
         modelSpinner.adapter = ArrayAdapter(this,
             android.R.layout.simple_spinner_dropdown_item, CuClient.MODELS)
+
+        // 사고수준 목록은 **모델마다 다르다** — 3.7·3.8 은 minimal 을 HTTP 400 으로 거절한다.
+        // 그래서 고정 어댑터를 한 번 다는 게 아니라 모델이 바뀔 때마다 다시 만든다.
+        // [want] 는 살리고 싶은 값 — 이 모델이 못 받으면 DEFAULT_THINKING 으로 떨어진다.
+        fun refreshThinking(model: String, want: String?) {
+            val list = CuClient.thinkingFor(model)
+            thinkSpinner.adapter = ArrayAdapter(this,
+                android.R.layout.simple_spinner_dropdown_item, list)
+            thinkSpinner.setSelection(CuClient.thinkingIndex(list, want))
+        }
+
         modelSpinner.setSelection(CuClient.modelIndex(
             prefs.getString("model", null) ?: BuildConfig.GEMINI_MODEL))
+        refreshThinking(CuClient.MODELS[modelSpinner.selectedItemPosition],
+            prefs.getString("thinking", null) ?: BuildConfig.GEMINI_THINKING)
 
-        val thinkSpinner = findViewById<Spinner>(R.id.thinkingSpinner)
-        thinkSpinner.adapter = ArrayAdapter(this,
-            android.R.layout.simple_spinner_dropdown_item, CuClient.THINKING)
-        thinkSpinner.setSelection(CuClient.thinkingIndex(
-            prefs.getString("thinking", null) ?: BuildConfig.GEMINI_THINKING))
+        // ★ 리스너는 위 setSelection **뒤에** 단다. 먼저 달면 setSelection 이 콜백을 때리는데,
+        //   그때 thinkSpinner 에는 아직 어댑터가 없어 want=null 이 되고, 저장해 둔 사고수준이
+        //   화면에 뜨기도 전에 기본값으로 덮인다.
+        modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                // 고르고 있던 사고수준은 최대한 유지한다. 3.5/minimal 에서 3.8 로 바꾼 경우처럼
+                // 그 값이 새 모델에 없을 때만 low 로 옮겨간다.
+                refreshThinking(CuClient.MODELS[pos], thinkSpinner.selectedItem?.toString())
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
 
         histBtn.setOnClickListener {
             logView.text = loadHistory()
@@ -112,8 +133,10 @@ class MainActivity : AppCompatActivity() {
             val maxTurns = (turnsInput.text.toString().trim().toIntOrNull() ?: 20)
                 .coerceIn(1, 40)
             turnsInput.setText(maxTurns.toString())   // ★ clamp 결과를 화면에 되돌린다
-            val model = CuClient.MODELS[modelSpinner.selectedItemPosition]
-            val thinking = CuClient.THINKING[thinkSpinner.selectedItemPosition]
+            val model = modelSpinner.selectedItem?.toString() ?: CuClient.DEFAULT_MODEL
+            // ★ CuClient.THINKING[pos] 로 읽으면 안 된다 — 이 스피너의 목록은 모델마다 달라서
+            //   (thinkingFor) 전체 목록의 인덱스와 어긋난다. 선택된 값을 그대로 읽는다.
+            val thinking = thinkSpinner.selectedItem?.toString() ?: CuClient.DEFAULT_THINKING
             prefs.edit()
                 .putInt("max_turns", maxTurns)
                 .putString("model", model)

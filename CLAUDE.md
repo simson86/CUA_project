@@ -21,7 +21,7 @@ Agents that drive a **real Android device via ADB** using Google's **Gemini Comp
 - ✅ 완료 알림 + 앱 내 로그 실시간 출력·파일 저장(`run_history.txt`)
 - ✅ 중단 버튼 — 루프 중간에 사용자가 멈춤
 - ✅ 최대 턴 수 사용자 설정 — 앱에서 1~40 지정(빈칸/오입력은 20, 범위 밖은 clamp 후 입력칸에 반영), `SharedPreferences`로 유지. 20턴 안에 안 끝나는 작업이 있어서 넣음. 소켓 `RUN`은 기본 20 고정 — 목표 문자열 파싱과 충돌해서 의도적으로 제외. **빌드 확인, 실기기 미검증**
-- ✅ 모델·사고수준을 앱에서 선택 — 드롭다운 2개(`CuClient.MODELS`: `gemini-3.5-flash`/`gemini-3.6-flash` × `CuClient.THINKING`: `minimal`/`low`/`medium`/`high`), `SharedPreferences` 유지. 값 우선순위는 **저장값 > `android/local.properties`의 `GEMINI_MODEL`·`GEMINI_THINKING`(= 드롭다운 첫 기본 선택, 빌드 시 `BuildConfig`로) > `CuClient` 기본값(3.5-flash / low)**. 실행 로그 첫 줄 `[설정] model=… thinking=… maxTurns=…`에 기록. 소켓 `RUN`은 앱이 마지막에 고른 설정을 물려받음(그 경로는 `[설정]` 줄 없음). 새 모델은 `CuClient.MODELS`에 한 줄 추가. **빌드·구성캐시 검증 완료, 실기기 미검증**
+- ✅ 모델·사고수준을 앱에서 선택 — 드롭다운 2개(`CuClient.MODELS`: `gemini-3.5-flash`/`3.6`/`3.7`/`3.8` × 사고수준 `minimal`/`low`/`medium`/`high`), `SharedPreferences` 유지. **사고수준은 모델마다 목록이 다르다** — 3.7·3.8 은 `minimal` 을 400 으로 거절해서 드롭다운에서 아예 뺀다(아래 Gotchas). 그래서 사고수준 목록의 출처는 `CuClient.THINKING`(전체)이 아니라 `CuClient.thinkingFor(model)` 이고, 모델을 바꾸면 사고수준 드롭다운이 다시 그려진다(고르고 있던 값은 새 모델이 받으면 유지, 아니면 `low`). 값 우선순위는 **저장값 > `android/local.properties`의 `GEMINI_MODEL`·`GEMINI_THINKING`(= 드롭다운 첫 기본 선택, 빌드 시 `BuildConfig`로) > `CuClient` 기본값(3.5-flash / low)**. 실행 로그 첫 줄 `[설정] model=… thinking=… maxTurns=…`에 기록. 소켓 `RUN`은 앱이 마지막에 고른 설정을 물려받음(그 경로는 `[설정]` 줄 없음). 새 모델은 `CuClient.MODELS`에 한 줄 추가(사고수준 제약이 있으면 `THINKING_UNSUPPORTED`에도 한 줄). 모델·사고수준 대입은 `CuClient.configure()` 로만 — 따로 대입하면 **조합**(3.8+`minimal`)을 검증할 곳이 없어지고, UI 를 안 거치는 소켓 `RUN`·오래된 저장값이 그 조합으로 들어올 수 있다. **실기기 검증 완료** (2026-09-08, SM-S931N) — 4종 드롭다운, 3.7·3.8 선택 시 `minimal` 제거, `minimal` 상태에서 3.8 로 바꿀 때 `low` 로 이동, 저장·복원, 3.8 실주행까지. **단 턴 수·정확도 A/B 는 안 쟀다**(아래 Gotchas)
 - ✅ **위험 액션 확인(HITL)** — `require_confirmation` 시 동의 카드 → 승인/거부. 실기기 검증 완료 (2026-08-04). 2026-08-12 에 **승인한 탭이 빗나가던 버그** 수정 — 카드가 포커스를 뺏어 키보드가 내려가면서 좌표가 어긋났다(아래 Gotchas). 수정 후 재검증 완료
 - ✅ 8080 소켓 서버 (`a11service.startServer`) — PC가 같은 Wi-Fi에서 `SHOT`/`TAP`/`RUN` 등으로 원격 조종. 짝은 `live/a11service_bridge.py`
 - ✅ **자격증명 입력 인계** — 에이전트가 값을 모르는 입력칸을 사용자에게 넘김. 값은 사용자가 뒤 앱의 진짜 키보드로 직접 침(앱이 값을 쥐지 않음 → 로그에도 안 남음). 카드 버튼은 경로에 따라 다르다 — 비밀번호 게이트는 `[입력했어요]`/`[중단]`, 모델 경로는 `[필요 없어요]`가 추가된 3종. **카드는 접을 수 있다**(헤더 우측 ▴/▾) — 로그인 폼의 아이디 칸을 가리는 경우가 있어서다. 접힌 상태에도 `[입력했어요]`를 남겨 둔다(가려서 접은 사용자에게 '펼치기→누르기' 두 번을 시키지 않으려고). **모델 경로에만 탈출구를 두는 이유**: 모델 판단은 헛짚을 수 있는데(인증번호 참양성 2/5) 빠져나갈 길이 없으면 사용자가 아무것도 안 치고 `[입력했어요]`를 눌러 모델에게 거짓을 보고하게 된다. 반대로 비밀번호 게이트에 이걸 열면 '모델의 추측값을 비밀번호 칸에 넣어라'가 된다. **감지 경로가 둘**:
@@ -65,6 +65,36 @@ Agents that drive a **real Android device via ADB** using Google's **Gemini Comp
 이 서버는 **모르는 키를 반드시 거절한다**(엉터리 키로 대조군을 먼저 확인). 그래서 200 = 실제로 읽혔다는 뜻이고, `usage.total_thought_tokens`도 값에 따라 움직인다(3.5-flash: 미지정 63 / `minimal` 0 / `high` 149).
 
 **주의:** `docs/reference/thinking-level.md`는 SDK(`google-genai`) 기준 문서다. 일반 `generate_content`는 `thinking_config` **중첩**이 맞아서, 그쪽을 근거로 REST 코드를 "고치면" 400이 된다. 안전 승인 형식(위)과 정확히 같은 구도다. ⚠️ 실제로 `cua/cu_client.py`의 `_build_generation_config`가 중첩 형식이라 **2026-07-17 이후 `live --thinking`/`CU_THINKING_LEVEL`이 조용히 무효**다(400도 안 남). 파이썬 쪽은 현재 작업 범위 밖이라 **미수정** — 근거·수치는 `docs/reference/android_run-model-thinking-2026-08-11.md` §14.
+
+### 사고수준은 모델마다 받는 값이 다르다 — 3.7·3.8 은 `minimal` 이 없다 ★
+`minimal`/`low`/`medium`/`high` 4종이 **모든 모델에 공통이 아니다.** 실측 2026-09-08
+(`computer_use` mobile + 커스텀 함수 동반, 4모델 × 4수준 전수):
+
+| 모델 | `minimal` | `low` | `medium` | `high` |
+|---|---|---|---|---|
+| `gemini-3.5-flash` | ✅ | ✅ | ✅ | ✅ |
+| `gemini-3.6-flash` | ✅ | ✅ | ✅ | ✅ |
+| `gemini-3.7-flash` | ❌ 400 | ✅ | ✅ | ✅ |
+| `gemini-3.8-flash` | ❌ 400 | ✅ | ✅ | ✅ |
+
+400 메시지가 허용값을 직접 알려준다 — `'minimal' is not a supported thinking level for this
+model. Allowed values are: medium, low, high.` 즉 신형에는 '사고 끄기'가 없다(3.5·3.6 은
+`minimal` 에서 `total_thought_tokens=0` 이 나온다).
+
+이게 UI 에 주는 함의: 모델 × 사고수준을 **자유 조합으로 두면 안 된다.** 조합이 틀리면 첫
+`cuCall` 에서 400 이라 액션 하나 못 해보고 죽는다. 특히 조용한 함정은 **오래된 저장값** —
+3.5 로 `minimal` 을 쓰던 사용자가 모델만 3.8 로 바꾸면 그 조합이 만들어진다. 그래서
+`CuClient.thinkingFor(model)` 이 드롭다운 목록을 정하고, `CuClient.configure()` 가 마지막
+방어선으로 조합을 다시 거른다(소켓 `RUN` 처럼 UI 를 안 거치는 경로 때문에 둘 다 필요하다).
+
+⚠️ **`3.7`·`3.8` 이 "돌아간다"는 확인됐지만 "더 낫다"는 안 쟀다.** 실기기에서 3.8 실주행까지
+확인했다(2026-09-08). 하지만 **같은 과제를 3.5 와 나란히 돌린 A/B 는 없다** — 턴 수·정확도를
+비교한 적이 없으므로 "3.8 이 낫다/못하다"고 쓰지 말 것. 이 프로젝트에서 속도는 한 턴의 토큰이
+아니라 **총 턴 수**이므로(벽시계의 ~85%가 API 왕복), 기본 모델을 올리려면 폰에서 같은 과제로
+각 3회 이상 돌려 완주 여부와 턴 수를 봐야 한다. `DEFAULT_MODEL` 은 그때까지 `gemini-3.5-flash`
+로 둔다. 단가도 모른다 — `tools/bench_thinking.py` 의 가격표는 3.5 조차 "추정 placeholder"라,
+턴이 줄어도 총비용이 준다는 보장이 없다. 참고로 1턴짜리 `total_thought_tokens` 숫자는 표본이 1이라 순서도
+안 맞는다(3.5 는 high 30 < medium 80) — **200/400 말고는 저 실측에서 아무것도 읽지 말 것.**
 
 ### 커스텀 함수는 쓸 수 있다 — 역시 평면 ★
 CU API 는 `computer_use` 와 **커스텀 함수 선언을 함께** 받는다. 이걸로 모델이 우리 코드에 말을 거는 통로를 만들 수 있다(`CuClient.requestUserInputTool`). 2026-08-12 실측:

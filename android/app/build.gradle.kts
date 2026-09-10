@@ -36,7 +36,10 @@ android {
         val model = (props.getProperty("GEMINI_MODEL") ?: "").trim()
         val thinking = (props.getProperty("GEMINI_THINKING") ?: "").trim().lowercase()
 
-        // 사고수준만 여기서 검증한다. 값이 4종으로 고정이라 목록을 적어도 안 낡기 때문이다.
+        // 사고수준만 여기서 검증한다. '철자'는 4종으로 고정이라 목록을 적어도 안 낡기 때문이다.
+        // ★ 여기서 보는 건 철자뿐이고 **모델과의 조합은 못 본다** — 3.7·3.8 은 minimal 을 거절하는데
+        //   그 판단은 CuClient.thinkingFor 소관이다. 씨앗이 그런 조합이어도 괜찮다:
+        //   CuClient.configure 가 실행 직전에 기본값으로 떨궈서 400 이 나지 않는다.
         // 모델은 검증하지 않는다 — 후보 목록(CuClient.MODELS)을 여기 복사하면 새 모델이 나올 때마다
         // 두 곳을 고쳐야 하고, 그게 바로 위에서 피하려던 '기본값 두 군데' 문제와 같은 함정이다.
         // 모델 오타는 조용히 DEFAULT_MODEL 로 떨어진다(드롭다운이 실제 값을 정하므로 영향이 작다).
