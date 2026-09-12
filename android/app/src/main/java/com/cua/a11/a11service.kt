@@ -114,7 +114,8 @@ class a11service : AccessibilityService(), Executor {
         val r = try {
             runAgent(this, cu, task,maxTurns,
                 log = { line -> log(line);postOverlay(line) },
-                cancel = {cancelled})
+                cancel = {cancelled},
+                trace = runTrace)
         } catch (e: Exception) {
             "오류: ${e.message}"     // screenshot/네트워크 예외도 알림에 잡히게
         }
@@ -246,6 +247,23 @@ class a11service : AccessibilityService(), Executor {
 
     override fun appNote(): String? =
         rootInActiveWindow?.packageName?.toString()?.let { appNotes[it] }
+
+    // ── 구조화 로깅(0단계) ────────────────────────────────────────────────
+    //  longVersionCode 는 기억 무효화의 근거다(설계 §7 4번). 지금은 기록만 하고 쓰지 않지만,
+    //  안 적어두면 나중에 소급이 안 되므로 0단계부터 남긴다.
+    override fun foregroundApp(): com.cua.a11.Foreground? =
+        rootInActiveWindow?.packageName?.toString()?.let { pkg ->
+            com.cua.a11.Foreground(pkg, pkgVersionOf(pkg))
+        }
+
+    private fun pkgVersionOf(pkg: String): Long? = try {
+        packageManager.getPackageInfo(pkg, 0).longVersionCode
+    } catch (e: Exception) { null }   // 앱이 지워졌거나 조회 불가 — 로깅이 실행을 막으면 안 된다
+
+    /** 실행 기록 훅. DB 는 처음 실행될 때 만들어진다. */
+    private val runTrace: com.cua.a11.RunTrace by lazy {
+        com.cua.a11.memory.RoomRunTrace(com.cua.a11.memory.MemoryDb.get(this).dao())
+    }
 
     private fun captureOnce(): ByteArray {
         hideForShot()                          // 오버레이 숨기고 프레임 대기
@@ -752,7 +770,9 @@ class a11service : AccessibilityService(), Executor {
                         "OPEN"      -> { openApp(p[1]); ackOK(client) }
                         "RUN" -> {
                             val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
-                            val result = runAgent(this, cu, task)          // this = a11service = Executor
+                            // 소켓 경로도 기록한다 — tools/bench_*.py 가 이쪽을 쓰므로
+                            // 여기서 빠지면 정작 측정할 실행이 로그에 안 남는다.
+                            val result = runAgent(this, cu, task, trace = runTrace)  // this = a11service = Executor
                             client.getOutputStream().apply {
                                 write((result + "\n").toByteArray()); flush()
                             }
