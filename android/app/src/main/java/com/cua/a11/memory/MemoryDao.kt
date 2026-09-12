@@ -45,6 +45,47 @@ interface MemoryDao {
     @Query("SELECT action, COUNT(*) AS n FROM episode WHERE turn = 1 GROUP BY action ORDER BY n DESC")
     fun firstTurnActions(): List<ActionCount>
 
+    // ── 기억 읽기 (Unit 2) ────────────────────────────────
+    //  랭킹은 아직 없다. 기억이 몇 개일 때 점수식은 무의미하다 — Unit 7 에서 붙인다.
+    //  지금은 하드 필터만 걸고 LIMIT 으로 자른다.
+    //  하드 필터가 곧 설계 §5 ②단계다: ACTIVE · 무효화 안 됨 · 만료 전 · 민감하지 않음.
+
+    @Query(
+        "SELECT * FROM memory " +
+        "WHERE kind = 'APP_FACT' AND pkg = :pkg " +
+        "  AND state = 'ACTIVE' AND invalidAt IS NULL AND sensitivity = 'normal' " +
+        "  AND (expiresAt IS NULL OR expiresAt > :now) " +
+        "ORDER BY numRecalled DESC, id " +
+        "LIMIT :limit"
+    )
+    fun activeForApp(pkg: String, now: Long, limit: Int): List<MemoryEntity>
+
+    /**
+     * ACTIVE 인 PITFALL 전체. **키워드 매칭은 코틀린에서 한다.**
+     * 지금 규모(수십 건)에서 FTS5 를 세우는 건 과하고, 무엇보다 목표 문장을 어떻게 쪼갤지가
+     * 아직 안 정해졌다(설계 §5 의 3단계 대책). 커지면 그때 FTS5 로 옮긴다.
+     */
+    @Query(
+        "SELECT * FROM memory " +
+        "WHERE kind = 'PITFALL' " +
+        "  AND state = 'ACTIVE' AND invalidAt IS NULL AND sensitivity = 'normal' " +
+        "  AND (expiresAt IS NULL OR expiresAt > :now) " +
+        "ORDER BY numRecalled DESC, id"
+    )
+    fun activePitfalls(now: Long): List<MemoryEntity>
+
+    /** 주입 후 기록 — 다음 읽기의 순위를 만든다(설계 §5 ⑤단계). */
+    @Query("UPDATE memory SET numRecalled = numRecalled + 1, lastAccessed = :now WHERE id IN (:ids)")
+    fun markRecalled(ids: List<Long>, now: Long)
+
+    // ── 목록 UI·검증용 ────────────────────────────────────
+    @Query("SELECT * FROM memory ORDER BY state, kind, id")
+    fun allMemories(): List<MemoryEntity>
+
+    @Query("SELECT COUNT(*) FROM memory") fun memoryCount(): Int
+
+    @Insert fun insertMemory(m: MemoryEntity): Long
+
     /** N2 — 앱 UI 변경 주기의 대리 지표. 패키지별로 관측된 서로 다른 버전 수. */
     @Query("SELECT pkg, COUNT(DISTINCT pkgVersion) AS versions FROM episode " +
            "WHERE pkg IS NOT NULL GROUP BY pkg ORDER BY versions DESC")

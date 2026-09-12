@@ -200,22 +200,8 @@ class CuClient(private val apiKey : String,
           open their mail or messages to look it up — ask for it with `request_user_input`.
     """.trimIndent()
 
-    // ── 작업 유형별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ────────────────
-    //  '앱'이 아니라 '작업 종류'에 공통으로 걸리는 사항용. 목표 문장으로 판별해 매 턴 붙는다.
-    //  넣기 전에 따져볼 것: 관련 없는 작업에서 읽어도 해가 없는 문장이면, 여기 말고
-    //  system_prompt 에 상시로 두는 편이 낫다(조건부 주입은 관리 비용이 있다).
-    //  주의: 키워드 매칭은 취약하다 — "휴지통에 넣어줘"는 '삭제'에 안 걸린다.
-    private val taskNotes = listOf<Pair<Regex, String>>(
-        // Regex("삭제|지워|delete|remove") to
-        //     "Deletion flows are two-step: after the delete tap, expect a confirmation " +
-        //     "dialog, and verify the item is gone from the list before finishing.",
-    )
     /** run_history.txt 에 남길 설정 요약. 지난 실행이 어떤 설정이었는지 알 수 있게 한다. */
     fun settingsLine() = "model=$model thinking=$thinkingLevel"
-
-    /** 목표 문장에 걸리는 참고사항. 목표는 실행 내내 안 바뀌므로 매 턴 같은 값이다. */
-    fun taskNote(task: String): String? =
-        taskNotes.firstOrNull { it.first.containsMatchIn(task) }?.second
 
     // ── 요청 조립 ────────────────────────────────────────────────
     private fun imageBlock(png: ByteArray) = JSONObject()
@@ -332,8 +318,19 @@ interface Executor {
     fun dispatch(name: String, args: JSONObject): JSONObject?
     fun confirm(explanation: String): Boolean
 
-    /** 지금 화면에 떠 있는 앱에만 해당하는 참고사항(없으면 null). 구현은 a11service.appNotes 참조. */
+    /** 지금 화면에 떠 있는 앱에만 해당하는 참고사항(없으면 null). */
     fun appNote(): String? = null
+
+    /**
+     * 목표 문장에 걸리는 참고사항(없으면 null). 목표는 실행 내내 안 바뀌므로 호출부가 캐시한다.
+     *
+     * 원래 CuClient 안의 하드코딩 목록이었는데 Unit 2 에서 여기로 옮겼다 — 판단 코어가
+     * 기억을 모르게 하려면 두 노트가 **같은 경계**를 지나야 한다.
+     *
+     * 넣기 전에 따져볼 것: 관련 없는 작업에서 읽어도 해가 없는 문장이면, 기억이 아니라
+     * system_prompt 에 상시로 두는 편이 낫다(조건부 주입은 관리 비용이 있다).
+     */
+    fun taskNote(task: String): String? = null
 
     /** 지금 입력 포커스가 비밀 값 칸인가. **로그 마스킹 전용**이며 실행 흐름을 바꾸지 않는다.
      *  기본 false — 소켓 경로나 다른 구현체는 종전대로 동작한다. */
@@ -375,7 +372,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
     fun emit(s:String){android.util.Log.i("a11cu",s);log(s)}
     // 참고사항 두 갈래: 작업 유형(목표로 판별, 실행 내내 고정) + 현재 앱(턴마다 달라짐).
     // 둘 다 지금은 비어 있어 note == null 이고, 그때는 요청 본문이 종전과 완전히 동일하다.
-    val tNote = cu.taskNote(task)
+    val tNote = exec.taskNote(task)
     fun note(): String? = listOfNotNull(tNote, exec.appNote())
         .joinToString(" ").ifBlank { null }
 

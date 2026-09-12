@@ -231,22 +231,17 @@ class a11service : AccessibilityService(), Executor {
     @Volatile private var lastEventTs = 0L      // [Phase 1 · 임시 계측] 마지막 화면 변경 시각
     @Volatile private var lastAction = "-"      // [Phase 1 · 임시 계측] 직전에 실행한 액션 이름
 
-    // ── 앱별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ──────────────────────
-    //  지금 화면에 떠 있는 앱일 때만 모델에게 전달된다. system_prompt 에 넣으면 무관한
-    //  작업에서도 계속 따라다니며 다른 지시의 주의력을 뺏으므로, 여기 두고 조건부로 붙인다.
-    //  넣는 규칙:
-    //   - 로그에서 모델이 '실제로 반복해서 막히는 것'을 확인한 뒤에만 추가. 미리 상상해서 쓰지 말 것.
-    //   - 한 앱당 한두 줄. 왜 넣었는지(어떤 실패를 봤는지) 옆에 주석으로 남길 것.
-    //   - 앱이 업데이트되어 UI 가 바뀌면 낡은 메모가 모델을 오도한다 — 같이 정리할 것.
-    //   - 여러 앱에 공통인 사항이면 여기 말고 CuClient.taskNotes 나 system_prompt 쪽을 먼저 검토.
-    private val appNotes = mapOf<String, String>(
-        // "com.sec.android.gallery3d" to
-        //     "Samsung Gallery: tapping the trash icon opens a second dialog that must " +
-        //     "also be confirmed before the photo is actually deleted.",
-    )
+    // ── 참고사항 주입 (Unit 2) ──────────────────────────────────────────────
+    //  하드코딩 맵이던 것이 memory 테이블 조회로 바뀌었다. 넣는 규칙 자체는 그대로다:
+    //   - 로그에서 모델이 '실제로 반복해서 막히는 것'을 확인한 뒤에만 추가.
+    //   - 한 앱당 한두 줄. 왜 넣었는지는 source_run_id 가 가리킨다.
+    //   - 관련 없는 작업에서 읽어도 해가 없는 문장이면 기억이 아니라 system_prompt 감이다.
+    //  예산·민감도 필터는 전부 MemoryGateway 안에 있다 — 여기서 다시 걸지 말 것.
 
     override fun appNote(): String? =
-        rootInActiveWindow?.packageName?.toString()?.let { appNotes[it] }
+        rootInActiveWindow?.packageName?.toString()?.let { gateway.readForApp(it) }
+
+    override fun taskNote(task: String): String? = gateway.readForTask(task)
 
     // ── 구조화 로깅(0단계) ────────────────────────────────────────────────
     //  longVersionCode 는 기억 무효화의 근거다(설계 §7 4번). 지금은 기록만 하고 쓰지 않지만,
@@ -260,10 +255,10 @@ class a11service : AccessibilityService(), Executor {
         packageManager.getPackageInfo(pkg, 0).longVersionCode
     } catch (e: Exception) { null }   // 앱이 지워졌거나 조회 불가 — 로깅이 실행을 막으면 안 된다
 
-    /** 실행 기록 훅. DB 는 처음 실행될 때 만들어진다. */
-    private val runTrace: com.cua.a11.RunTrace by lazy {
-        com.cua.a11.memory.RoomRunTrace(com.cua.a11.memory.MemoryDb.get(this).dao())
-    }
+    /** DB 는 처음 쓰일 때 만들어진다. trace 와 gateway 가 같은 인스턴스를 공유한다. */
+    private val memoryDao by lazy { com.cua.a11.memory.MemoryDb.get(this).dao() }
+    private val runTrace: com.cua.a11.RunTrace by lazy { com.cua.a11.memory.RoomRunTrace(memoryDao) }
+    private val gateway by lazy { com.cua.a11.memory.MemoryGateway(memoryDao) }
 
     private fun captureOnce(): ByteArray {
         hideForShot()                          // 오버레이 숨기고 프레임 대기

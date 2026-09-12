@@ -54,6 +54,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Room 스키마를 JSON 으로 내보낸다. 마이그레이션을 쓰기 시작했으므로 필요하다 —
+    // 손으로 쓴 CREATE TABLE 이 Room 이 기대하는 것과 한 글자라도 다르면 런타임에
+    // "Migration didn't properly handle" 로 죽는데, 이 JSON 이 정답지 역할을 한다.
+    ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
     buildTypes {
         release {
             optimization {
