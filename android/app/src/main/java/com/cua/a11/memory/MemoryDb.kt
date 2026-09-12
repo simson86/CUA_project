@@ -9,7 +9,7 @@ import androidx.room.*
 //
 //  이 단계에서 memory 테이블은 만들지 않는다 — 아직 아무도 안 쓰고, 컬럼이 확정되지
 //  않았다(설계 문서 부록 F의 N1~N6). Unit 3 에서 스키마 버전을 올리며 추가한다.
-//  설계 근거 전체는 docs/reference/android_run-memory-2026-09-12.md 참조.
+//  설계 근거 전체는 docs/reference/android_run-memory-2026-09-12.html 참조.
 
 /** 실행 1건. 목표·설정·결과. 턴 상세는 episode 로 나간다. */
 @Entity(tableName = "run")

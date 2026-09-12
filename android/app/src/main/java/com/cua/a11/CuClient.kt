@@ -350,7 +350,7 @@ data class Foreground(val pkg: String, val versionCode: Long?)
 // ── 실행 기록 훅 (0단계 구조화 로깅) ──
 // runAgent 는 이 인터페이스만 알고 DB·Room 을 모른다. 기본 null 이라 소켓 경로·테스트는
 // 종전과 완전히 동일하게 돈다. 구현은 memory/RoomRunTrace.kt.
-// 설계: docs/reference/android_run-memory-2026-09-12.md
+// 설계: docs/reference/android_run-memory-2026-09-12.html
 interface RunTrace {
     fun onRunStart(runId: String, task: String, model: String, thinking: String, maxTurns: Int)
     fun onTurn(runId: String, rec: TurnRecord)
