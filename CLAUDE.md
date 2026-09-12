@@ -35,6 +35,20 @@ Agents that drive a **real Android device via ADB** using Google's **Gemini Comp
 - ✅ 동작하는 베이스라인. 벤치마크 도구(`tools/bench_*.py`)가 여기 붙어 있음
 - ⚠️ `safety_acknowledgement` 형식이 구식(`cua/cu_client.py`) — 위험 액션을 만나면 400. 아래 Gotchas 참조
 
+## 기억 시스템 — 먼저 `MEMORY.md` 를 읽어라 ★
+
+**기억(memory) 관련 작업을 시작하기 전에 저장소 루트의 `MEMORY.md` 를 먼저 읽어라.**
+설계가 장황해서 여기 두면 이 파일이 감당이 안 된다. 현재 상태·빌드 함정·열린 결정이
+전부 거기 있고, 이 파일에는 중복해 적지 않는다.
+
+해당하는 작업:
+- `android/app/src/main/java/com/cua/a11/memory/` 를 건드릴 때
+- `runAgent` 의 `RunTrace`/`trace`, `Executor.foregroundApp()`, `appNote`/`taskNote` 를 건드릴 때
+- `memory.db` · Room · KSP 빌드 설정을 건드릴 때
+
+설계 근거 전체(아홉 개 축·스키마·결정 기록·열린 질문)는
+`docs/reference/android_run-memory-2026-09-12.html` — 브라우저로 열 것.
+
 ## Gotchas — 코드만 봐선 모르는 것들
 
 ### CU 안전 승인은 공식 문서 형식으로 보내면 안 먹는다 ★
