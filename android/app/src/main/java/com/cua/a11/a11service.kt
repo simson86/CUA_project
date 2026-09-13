@@ -30,6 +30,7 @@ import androidx.core.app.NotificationManagerCompat
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
@@ -58,6 +59,16 @@ class a11service : AccessibilityService(), Executor {
         // 정확성이 아니라 카드가 헛뜨는 빈도에만 영향을 준다. 로그를 보며 조정할 값.
         const val BLACK_RECHECK_MS = 400L
         const val HANDOVER_TIMEOUT_MIN = 3L
+
+        // ── 콜백 대기 상한 ──────────────────────────────────────
+        //  아래 셋은 전부 '콜백이 오기를' 기다린다. 시간 제한이 없으면 콜백이 한 번
+        //  안 오는 것만으로 스레드가 **영구히** 멈춘다. 소켓 서버는 단일 스레드라
+        //  (accept 루프에서 runAgent 를 그대로 돌린다) 그때 서버가 통째로 죽고,
+        //  포트는 리스닝인데 아무 명령도 안 받는 상태가 된다 — 앱 재시작 전엔 안 풀린다.
+        //  실측된 정상값: 캡처 ~0.3초. 아래 값은 넉넉한 상한일 뿐 튜닝 대상이 아니다.
+        const val CAPTURE_TIMEOUT_S = 10L
+        const val GESTURE_TIMEOUT_S = 10L
+        const val UI_POST_TIMEOUT_S = 5L
         const val HANDOVER_SELF = 0   // 사용자가 직접 처리 → 잠시 기다렸다 다시 찍는다
         const val HANDOVER_SKIP = 1   // 보안 화면 아님 → 그대로 진행, 이 앱에서는 다시 안 물음
         const val HANDOVER_STOP = 2   // 실행 중단
@@ -86,6 +97,20 @@ class a11service : AccessibilityService(), Executor {
         super.onDestroy()
     }
     @Volatile private var cancelled = false
+
+    /**
+     * 이 실행을 지켜보는 사람이 있나. 앱 UI 실행은 true, 소켓 `RUN` 은 false.
+     *
+     * 사람에게 넘기는 지점(인계 카드·자격증명 카드)은 **답할 사람이 있을 때만** 뜻이 있다.
+     * 소켓 경로는 정의상 무인이라(개발·측정용, `tools/bench_*.py` 의 짝) 카드를 띄우면
+     * 타임아웃까지 그냥 버린다 — 실측 2026-09-13: 소켓 RUN 203초 중 **187초**가 인계 카드가
+     * 없는 사람을 기다린 시간이었다. 무인이면 기다리지 말고 즉시 실패한다.
+     *
+     * `cancelled`·`skipBlackPkgs` 와 같은 성질의 실행 단위 상태다 — 동시에 두 실행이
+     * 돌면 서로를 덮는다. 지금은 실질적으로 직렬이라 그대로 두지만, 병렬 실행을 허용하게
+     * 되면 셋 다 같이 옮겨야 한다.
+     */
+    @Volatile private var attended = true
     // 카드가 떠 있는 동안 에이전트 스레드는 latch 앞에서 자고 있어 cancel 깃발을 확인할 코드가
     // 돌지 않는다. 중단 버튼이 그 대기까지 깨워야 '눌러도 반응 없음'이 안 생긴다.
     @Volatile private var pendingLatch: CountDownLatch? = null
@@ -103,6 +128,7 @@ class a11service : AccessibilityService(), Executor {
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
         cancelled = false
         skipBlackPkgs.clear()      // "그냥 계속" 판단은 이번 실행에만 유효하다
+        attended = true            // 앱에서 눌렀으니 사람이 보고 있다
         // 이번 판에 쓸 설정을 갈아끼운다. 따로 대입하지 말 것 — 사고수준이 이 모델에서
         // 유효한지는 '조합'을 봐야 알 수 있고(3.7·3.8 은 minimal 을 400 으로 거절한다),
         // 그 판단은 configure 안에 한 번만 둔다.
@@ -179,7 +205,14 @@ class a11service : AccessibilityService(), Executor {
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     // 터치를 아예 안 받는다. 이게 없으면 화면 최상단을 덮은 이 띠가
                     // 그 영역의 탭을 먹어버려 dispatchGesture 가 목표에 닿지 못한다.
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    // ★ 실행 중에는 화면이 꺼지지 않게 한다. 에이전트가 액션 없이 기다리는
+                    //   구간(wait, 긴 API 왕복)이 화면 꺼짐 시간을 넘기면 캡처가 검게 나오고,
+                    //   screenshot() 이 그걸 '화면이 꺼졌다'로 판정해 실행을 끝낸다.
+                    //   이 띠는 실행 중에만 떠 있으므로 수명이 정확히 실행과 같다.
+                    //   (소켓 경로는 이 띠를 안 띄우므로 해당 없음 — 거긴 애초에 무인이라
+                    //    화면이 꺼져 있으면 즉시 실패하는 게 맞다.)
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
                 PixelFormat.TRANSLUCENT
             )
             lp.gravity = Gravity.TOP
@@ -206,7 +239,10 @@ class a11service : AccessibilityService(), Executor {
         val tv = overlayView ?: return
         val latch = CountDownLatch(1)
         ui.post { tv.visibility = View.GONE; latch.countDown() }   // 메인스레드서 숨김
-        latch.await()                                             // 반영될 때까지 대기
+        // 상한을 두는 이유는 아래 CAPTURE_TIMEOUT_S 주석 참조. 여기서는 던지지 않고 넘어간다 —
+        // 최악의 결과가 '오버레이가 찍힌 스크린샷' 뿐이라 실행을 죽일 이유가 없다.
+        if (!latch.await(UI_POST_TIMEOUT_S, TimeUnit.SECONDS))
+            Log.w("A11y", "hideForShot: 메인 스레드 응답 없음 — 오버레이가 찍힐 수 있다")
         Thread.sleep(32)                                          // 컴포지터가 없는 프레임 그릴 시간
     }
     private fun showAfterShot() {
@@ -286,6 +322,18 @@ class a11service : AccessibilityService(), Executor {
         var png = captureOnce()
         if (probeSecureScreen(png) < BLACK_PCT_THRESHOLD) return png
 
+        // ★ 꺼진 화면과 보안 화면은 픽셀로 똑같이 검다 — 구분하지 않으면 화면이 꺼졌을 뿐인데
+        //   '보안 화면'이라며 카드를 내민다. 사람이 앞에 있으면 탭 한 번이라 무해하지만,
+        //   무인 실행에서는 3분을 통째로 버린다(실측 2026-09-13: 소켓 RUN 203초 중 187초).
+        //
+        //   화면이 꺼져 있으면 에이전트는 아무것도 할 수 없다 — 깨워 봐야 잠금화면이다.
+        //   그러니 기다리지 말고 여기서 끝낸다. 조용히 반쯤 망가진 실행을 만드는 것보다
+        //   시끄럽게 실패하고 사람이 화면을 켜고 다시 시작하는 편이 낫다.
+        //   (앱 UI 실행 중에는 진행 표시 띠가 FLAG_KEEP_SCREEN_ON 을 들고 있어 여기 안 온다.)
+        if (!getSystemService(PowerManager::class.java).isInteractive) {
+            throw IllegalStateException("화면이 꺼져 있습니다. 화면을 켜고 다시 실행하세요.")
+        }
+
         // 사용자가 이 앱에서 이미 "그냥 계속"을 골랐으면 다시 묻지 않는다.
         val pkg = rootInActiveWindow?.packageName?.toString()
         if (pkg != null && pkg in skipBlackPkgs) return png
@@ -294,6 +342,13 @@ class a11service : AccessibilityService(), Executor {
         Thread.sleep(BLACK_RECHECK_MS)
         png = captureOnce()
         if (probeSecureScreen(png) < BLACK_PCT_THRESHOLD) return png
+
+        // 여기까지 왔으면 화면은 켜져 있는데 내용이 검다 = 진짜 보안 화면일 가능성이 높다.
+        // 그건 사람만 풀 수 있는데, 무인 실행에는 그 사람이 없다.
+        if (!attended) {
+            throw IllegalStateException(
+                "화면을 읽을 수 없습니다(무인 실행). 보안 화면으로 보입니다 — pkg=$pkg")
+        }
 
         return handoverWait(png, pkg)
     }
@@ -432,6 +487,12 @@ class a11service : AccessibilityService(), Executor {
      *  그래서 run_history.txt 에도 남지 않는다.
      */
     private fun credentialHandover(reason: String, allowSkip: Boolean = false): JSONObject {
+        // 무인 실행에는 값을 쳐 줄 사람이 없다. 5분(CRED_TIMEOUT_MIN)을 기다려 봐야
+        // 결국 CRED_STOP 이므로, 기다리지 말고 지금 끝낸다.
+        if (!attended) {
+            requestCancel()
+            throw IllegalStateException("사용자 입력이 필요한데 무인 실행입니다: $reason")
+        }
         when (showCredentialCard(reason, allowSkip)) {
             CRED_STOP -> {
                 // 확인 카드의 '거부'와 같은 취급 — 여기서 끝낸다. dispatch 는 '루프를 끝내라'를
@@ -771,7 +832,26 @@ class a11service : AccessibilityService(), Executor {
                             val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
                             // 소켓 경로도 기록한다 — tools/bench_*.py 가 이쪽을 쓰므로
                             // 여기서 빠지면 정작 측정할 실행이 로그에 안 남는다.
-                            val result = runAgent(this, cu, task, trace = runTrace)  // this = a11service = Executor
+                            // ★ 실행 단위 상태를 runTask 와 똑같이 초기화한다. 안 하면 지난 실행이
+                            //   남긴 cancelled=true 를 물려받아 첫 턴에서 곧바로 중단된다.
+                            cancelled = false
+                            skipBlackPkgs.clear()
+                            attended = false            // 소켓 = 지켜보는 사람이 없는 실행
+                            //
+                            // ★ cancel 을 넘기지 않으면 기본값이 {false} 라 **중단이 아예 안 된다** —
+                            //   앱의 중단 버튼도, 인계 타임아웃이 세우는 requestCancel() 도 무시된다.
+                            //   실측 2026-09-13: 그래서 인계가 3분 만에 포기한 뒤에도 검은 화면을
+                            //   들고 그대로 진행했다.
+                            val result = try {
+                                runAgent(this, cu, task,
+                                    cancel = { cancelled }, trace = runTrace)  // this = a11service = Executor
+                            } catch (e: Exception) {
+                                // 예외를 그대로 튀우면 바깥 catch 가 로그만 남기고 연결을 닫아 PC 쪽은
+                                // '빈 응답'만 본다. 측정 스크립트가 이유를 읽게 한 줄로 돌려준다.
+                                "오류: ${e.message}"
+                            } finally {
+                                attended = true         // 다음 앱 UI 실행이 무인으로 오해받지 않게
+                            }
                             client.getOutputStream().apply {
                                 write((result + "\n").toByteArray()); flush()
                             }
@@ -818,7 +898,12 @@ class a11service : AccessibilityService(), Executor {
                     latch.countDown()
                 }
             })
-        latch.await()
+        // ★ 상한 없이 기다리면 콜백이 한 번 안 오는 것만으로 이 스레드가 영구히 멈춘다.
+        //   소켓 서버는 단일 스레드라(accept 루프에서 runAgent 를 그대로 돌린다) 그때
+        //   서버가 통째로 죽는다 — 포트는 LISTEN 인데 아무 명령도 안 받고, 앱 재시작
+        //   전엔 안 풀린다. 정상값이 ~0.3초이므로 10초면 '안 온다'로 봐도 된다.
+        if (!latch.await(CAPTURE_TIMEOUT_S, TimeUnit.SECONDS))
+            throw IllegalStateException("화면 캡처 응답 없음 (${CAPTURE_TIMEOUT_S}초)")
         // 빈 배열을 그대로 돌려주면 곧바로 pngSize() 가 png[16] 을 읽다 터져
         // "length=0; index=16" 같은 알 수 없는 메시지로 실행이 끝난다(실제 로그에서 관측).
         // 원인이 드러나는 예외로 바꾼다.
@@ -945,7 +1030,10 @@ private fun dispatchBlocking(gesture:GestureDescription){
             override fun onCompleted(d:GestureDescription?){latch.countDown()}
             override fun onCancelled(d:GestureDescription?){latch.countDown()}
         },null)
-        latch.await()
+        // 상한을 두는 이유는 capturePngBlocking 주석 참조. 여기서 던지면 runAgent 의
+        // 액션별 try 가 받아 {"status":"error"} 로 모델에 알리므로 모델이 스스로 고친다.
+        if (!latch.await(GESTURE_TIMEOUT_S, TimeUnit.SECONDS))
+            throw IllegalStateException("제스처 응답 없음 (${GESTURE_TIMEOUT_S}초)")
     }
     private fun tapBlocking(x:Float,y:Float){
         val path = Path().apply {moveTo(x,y)}
