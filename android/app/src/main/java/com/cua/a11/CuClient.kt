@@ -379,6 +379,10 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
     // 주입된 기억을 로그에 남긴다 — **바뀔 때만.** 요청 본문은 폰에서 볼 수 없으므로
     // 이 줄이 없으면 "기억이 정말 들어갔나"를 확인할 길이 없다. 반대로 매 턴 찍으면
     // 같은 문장이 로그를 뒤덮어 실제 액션이 안 보인다.
+    //
+    // ★ 반드시 **실제로 보낸 것**만 넘길 것. 이 로그의 존재 이유가 "주입됐는지 믿을 수
+    //   있게 하는 것"이라, 안 실린 걸 찍으면 있느니만 못하다. 승인 턴이 그 경우다
+    //   (putResult 의 safetyAck 갈래는 note 를 안 붙인다).
     var lastNote: String? = null
     fun logNote(n: String?) {
         if (n == lastNote) return
@@ -452,7 +456,9 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
                 // note() 는 스크린샷을 찍은 뒤 부른다 — 액션 실행 후의 포그라운드 앱 기준이어야
                 // 모델이 다음에 보게 될 화면과 메모가 같은 앱을 가리킨다.
                 val turnNote = note()
-                logNote(turnNote)
+                // 승인 턴엔 note 가 안 실리므로(putResult) 로그에도 찍지 않는다. null 을
+                // 넘겨 lastNote 도 지운다 — 다음 턴에 다시 실리면 그건 '바뀐 것'이 맞다.
+                logNote(if (safetyAck) null else turnNote)
                 cu.putResult(results, name, callId, png, status, safetyAck, turnNote)
                 // 액션 '실행 후' 기준으로 기록한다 — 모델이 다음에 볼 화면과 같은 시점이어야
                 // 나중에 로그를 읽을 때 "이 화면에서 이 액션이 나왔다"가 맞는 말이 된다.

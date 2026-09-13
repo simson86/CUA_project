@@ -139,6 +139,11 @@ Unit 9 에서 `MemoryGateway.KINDS` 에 한 줄 더하면 열린다.
 `runAgent` 가 `[기억] …` 을 찍는다 — **note 가 바뀔 때만.** 요청 본문은 폰에서 볼 수 없어
 이 줄이 없으면 주입 여부를 확인할 방법이 없고, 매 턴 찍으면 같은 문장이 로그를 덮는다.
 
+⚠️ **찍는 것은 반드시 '실제로 보낸 것'이어야 한다.** 승인 턴은 `result` 가 객체라
+`putResult` 가 note 를 안 붙이는데, 로그를 그 앞에서 무심코 찍으면 **안 실린 걸 찍는다**.
+이 로그의 존재 이유가 신뢰이므로 거짓말을 하면 있느니만 못하다 — `logNote` 에는
+`if (safetyAck) null else turnNote` 를 넘긴다.
+
 ### 실기기 검증 (2026-09-13, SM-S931N)
 `APP_FACT / com.android.settings / "Use the search icon at the top to find a setting quickly."`
 를 UI 로 넣고 `Open the Settings app` 을 실행:
