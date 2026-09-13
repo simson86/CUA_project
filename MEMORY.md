@@ -236,8 +236,22 @@ Unit 9 에서 `MemoryGateway.KINDS` 에 한 줄 더하면 열린다.
 | 진행 표시 띠에 `FLAG_KEEP_SCREEN_ON` | 앱 UI 실행 중에는 화면이 안 꺼진다 |
 | `latch.await()` 세 곳에 상한 | 아래 별도 항목 |
 
-측정: **187초 → 0.4초**, 그리고 연결을 끊는 대신 이유를 문장으로 돌려준다
-(`"오류: 화면이 꺼져 있습니다…"`). 잠금화면에서는 `pkg=com.android.systemui` 까지 짚는다.
+**실기기 검증 (2026-09-13, SM-S931N)**
+
+| | |
+|---|---|
+| 소켓 · 화면 꺼짐 | ✅ **187초 → 0.4초**, `"오류: 화면이 꺼져 있습니다…"` 를 돌려줌 |
+| 소켓 · 잠금화면 | ✅ 0.9초, `pkg=com.android.systemui` 까지 짚음 |
+| 소켓 · 정상 실행 | ✅ 37.5초 완주 — 회귀 없음 |
+| 소켓 · 실패 직후 서버 | ✅ `SHOT` 0.3초 — 죽지 않는다 |
+| 앱 UI · 진행 표시 띠 | ✅ 그대로 뜸, 실행 완주(2턴 ~21초) |
+| 앱 UI · `KEEP_SCREEN_ON` | ✅ 창 플래그 `fl=10000b8` → `0xb8 = 0x80│0x20│0x10│0x08` |
+| 앱 UI · 실행 후 정리 | ✅ 오버레이 0개 — 플래그가 안 남는다(화면이 다시 꺼질 수 있다) |
+
+창 플래그는 `adb shell dumpsys window windows | grep -A6 com.cua.a11` 의 `fl=` 로 본다.
+`0x80` 이 `FLAG_KEEP_SCREEN_ON` 이고 나머지는 종전 셋(`NOT_FOCUSABLE`·`NOT_TOUCHABLE`·
+`NOT_TOUCH_MODAL`)이다 — **띠의 터치 통과 정책은 그대로**여야 한다(안 그러면 최상단 탭을
+가로챈다, `CLAUDE.md` 참조).
 
 ### 소켓 `RUN` 은 `cancel` 을 안 넘기고 있었다 ★
 ```kotlin
