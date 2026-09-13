@@ -20,6 +20,13 @@ class MemoryGateway(private val dao: MemoryDao) {
 
         /** 우리 앱 자신. 에이전트가 *조작하는* 앱이 아니라 *실행이 시작된 곳*이라 앱 지식이 될 수 없다. */
         const val OWN_PACKAGE = "com.cua.a11"
+
+        // ── 목록 UI 가 쓰는 값 목록 (Unit 3) ───────────────────
+        //  RECIPE 는 일부러 뺐다 — 읽는 쪽(Unit 9)이 아직 없어서, 넣을 수 있게 해두면
+        //  사용자가 **아무도 안 읽는 행**을 만들게 된다. Unit 9 에서 함께 연다.
+        val KINDS = listOf("APP_FACT", "PITFALL")
+        val STATES = listOf("ACTIVE", "PENDING", "RETIRED")
+        val SENSITIVITIES = listOf("normal", "restricted")
     }
 
     /** 지금 떠 있는 앱에 대한 참고사항. 없으면 null — 그때 요청 본문은 종전과 동일하다. */
@@ -51,6 +58,46 @@ class MemoryGateway(private val dao: MemoryDao) {
         if (hits.isEmpty()) return null
         dao.markRecalled(hits.map { it.id }, now)
         return hits.joinToString(" ") { it.text }
+    }
+
+    // ── 목록 UI (Unit 3) ─────────────────────────────────────────────────
+    //  **읽기와 달리 여기서는 실패를 삼키지 않는다.** 에이전트 경로에서 "기억이 없다"와
+    //  "DB 가 깨졌다"는 결과가 같지만(둘 다 note == null 로 종전대로 돈다), 사람이 손으로
+    //  쓴 것이 조용히 사라지는 건 다른 종류의 실패다 — 사용자는 저장된 줄 알고 화면을 뜬다.
+    //  그래서 여기서 던진 예외는 호출부(MemoryActivity)가 받아 화면에 띄운다.
+
+    fun list(): List<MemoryEntity> = dao.allMemories()
+
+    /** id == 0 이면 새로 넣고, 아니면 덮어쓴다. 돌려주는 값은 그 행의 id. */
+    fun save(m: MemoryEntity): Long {
+        validate(m)?.let { throw IllegalArgumentException(it) }
+        return if (m.id == 0L) dao.insertMemory(m) else { dao.updateMemory(m); m.id }
+    }
+
+    fun delete(id: Long) = dao.deleteMemory(id)
+
+    /** 기억만 지운다. run·episode(실행 로그)는 남는다. */
+    fun deleteAll(): Int = dao.deleteAllMemories()
+
+    /**
+     * 저장해도 되는 행인가. 통과면 null, 아니면 사용자에게 보여줄 이유.
+     *
+     * 여기서 막는 건 전부 **읽기 경로에서 절대 안 걸리는 행**이다. 저장은 되는데 아무 때도
+     * 안 나오는 기억이 목록에 쌓이면, 사용자는 "기억이 작동 안 한다"고 결론 내린다.
+     * 읽기 조건(activeForApp / readForTask)이 바뀌면 이 함수도 같이 고쳐야 한다.
+     */
+    fun validate(m: MemoryEntity): String? {
+        if (m.text.isBlank()) return "내용이 비어 있습니다."
+        if (m.kind !in KINDS) return "알 수 없는 종류입니다: ${m.kind}"
+        if (m.kind == "APP_FACT") {
+            if (m.pkg.isNullOrBlank())
+                return "APP_FACT 는 패키지명이 있어야 합니다.\n없으면 어떤 앱에서도 조회되지 않습니다."
+            if (m.pkg == OWN_PACKAGE)
+                return "$OWN_PACKAGE 은 우리 앱 자신이라 주입 대상에서 제외됩니다.\n조작할 앱의 패키지명을 넣으세요."
+        }
+        if (m.kind == "PITFALL" && m.keywords.isNullOrBlank())
+            return "PITFALL 은 키워드가 있어야 합니다.\n없으면 어떤 목표 문장에도 걸리지 않습니다."
+        return null
     }
 
     /**

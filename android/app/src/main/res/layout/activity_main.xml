@@ -178,6 +178,15 @@
             android:text="로그 지우기"/>
     </LinearLayout>
 
+    <!-- 기억 목록 화면으로. 로그(무슨 일이 있었나)와 기억(다음에 무엇을 알려줄까)은
+         다른 것이라 버튼 줄을 따로 둔다. -->
+    <Button
+        android:id="@+id/memoryBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="기억 관리"/>
+
     <TextView
         android:id="@+id/resultView"
         android:layout_width="match_parent"

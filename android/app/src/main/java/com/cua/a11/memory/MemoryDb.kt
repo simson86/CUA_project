@@ -55,7 +55,7 @@ data class EpisodeEntity(
     val intent: String?,                 // 모델이 말한 의도
     val result: String?,                 // ok|error
     val hadSafety: Boolean,              // require_confirmation 이 붙었나 (설계 §3 규칙 A)
-    val note: String?,                   // 그 턴에 주입된 메모 (지금은 항상 null)
+    val note: String?,                   // 그 턴에 실제로 주입된 메모. 기억이 없으면 null
     val createdAt: Long,
 )
 

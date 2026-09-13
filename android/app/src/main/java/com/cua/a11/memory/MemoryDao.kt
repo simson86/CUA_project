@@ -3,6 +3,7 @@ package com.cua.a11.memory
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Update
 
 /** turn=1 의 액션 분포 — 설계 문서 부록 F의 Q7("턴 1에 appNote 를 붙일지")을 데이터로 답한다. */
 data class ActionCount(val action: String?, val n: Int)
@@ -85,6 +86,16 @@ interface MemoryDao {
     @Query("SELECT COUNT(*) FROM memory") fun memoryCount(): Int
 
     @Insert fun insertMemory(m: MemoryEntity): Long
+
+    /** id 로 찾아 통째로 교체. 사용자가 안 건드린 칸까지 다 쓰므로 호출부는 반드시 원본을
+     *  `copy()` 해서 넘겨야 한다 — 새로 지어 넘기면 numRecalled·timeAdded 같은 이력이
+     *  조용히 초기화된다. */
+    @Update fun updateMemory(m: MemoryEntity)
+
+    @Query("DELETE FROM memory WHERE id = :id") fun deleteMemory(id: Long)
+
+    /** 지운 행 수를 돌려준다. run·episode 는 건드리지 않는다 — 그쪽은 기억이 아니라 로그다. */
+    @Query("DELETE FROM memory") fun deleteAllMemories(): Int
 
     /** N2 — 앱 UI 변경 주기의 대리 지표. 패키지별로 관측된 서로 다른 버전 수. */
     @Query("SELECT pkg, COUNT(DISTINCT pkgVersion) AS versions FROM episode " +

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="20dp"
+    android:paddingTop="48dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="기억"
+        android:textSize="20sp"
+        android:textStyle="bold"/>
+
+    <!-- 이 화면이 무엇을 보여주는지 한 줄로. '실행 로그'와 헷갈리기 쉬워서 적어 둔다. -->
+    <TextView
+        android:id="@+id/memSummary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="12sp"
+        android:alpha="0.6"
+        android:text="불러오는 중…"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="12dp">
+
+        <Button
+            android:id="@+id/memAddBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="2"
+            android:text="새 기억"/>
+
+        <Button
+            android:id="@+id/memClearBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="2"
+            android:layout_marginStart="8dp"
+            android:text="전부 삭제"/>
+    </LinearLayout>
+
+    <!-- 목록이 비었을 때만 보인다. 빈 화면에 아무 설명이 없으면
+         '고장 났나'와 '아직 없다'를 구분할 수 없다. -->
+    <TextView
+        android:id="@+id/memEmpty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:textSize="14sp"
+        android:alpha="0.7"
+        android:visibility="gone"
+        android:text="아직 기억이 없습니다.\n‘새 기억’으로 하나 넣어 보세요.\n\n예) APP_FACT · com.android.settings\n  “Wi‑Fi 설정은 연결 메뉴 안에 있다”"/>
+
+    <ListView
+        android:id="@+id/memList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="12dp"
+        android:divider="#22000000"
+        android:dividerHeight="1dp"/>
+</LinearLayout>

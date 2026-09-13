@@ -376,6 +376,16 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
     fun note(): String? = listOfNotNull(tNote, exec.appNote())
         .joinToString(" ").ifBlank { null }
 
+    // 주입된 기억을 로그에 남긴다 — **바뀔 때만.** 요청 본문은 폰에서 볼 수 없으므로
+    // 이 줄이 없으면 "기억이 정말 들어갔나"를 확인할 길이 없다. 반대로 매 턴 찍으면
+    // 같은 문장이 로그를 뒤덮어 실제 액션이 안 보인다.
+    var lastNote: String? = null
+    fun logNote(n: String?) {
+        if (n == lastNote) return
+        lastNote = n
+        if (n != null) emit("[기억] $n")
+    }
+
     // ── 구조화 로깅(0단계). trace 가 null 이면 아래 호출은 전부 no-op 이라 종전과 동일하다.
     //  종료 경로가 다섯 개(+예외)라 outcome 을 지역 변수로 모으고 finally 에서 한 번만 기록한다.
     //  outcome 초기값이 "error" 인 이유: 예외로 빠져나가면 아무도 못 덮으므로 그대로 남아야 맞다.
@@ -387,6 +397,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
 
     try {
         var png = exec.screenshot()
+        logNote(tNote)
         var resp = cu.cuCall(cu.userInput(task, png, tNote), null)
         var prevId = resp.optString("id")
 
@@ -441,6 +452,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
                 // note() 는 스크린샷을 찍은 뒤 부른다 — 액션 실행 후의 포그라운드 앱 기준이어야
                 // 모델이 다음에 보게 될 화면과 메모가 같은 앱을 가리킨다.
                 val turnNote = note()
+                logNote(turnNote)
                 cu.putResult(results, name, callId, png, status, safetyAck, turnNote)
                 // 액션 '실행 후' 기준으로 기록한다 — 모델이 다음에 볼 화면과 같은 시점이어야
                 // 나중에 로그를 읽을 때 "이 화면에서 이 액션이 나왔다"가 맞는 말이 된다.
