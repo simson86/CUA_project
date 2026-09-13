@@ -200,22 +200,8 @@ class CuClient(private val apiKey : String,
           open their mail or messages to look it up — ask for it with `request_user_input`.
     """.trimIndent()
 
-    // ── 작업 유형별 참고사항 (지금은 비어 있음 — 발견되면 채운다) ────────────────
-    //  '앱'이 아니라 '작업 종류'에 공통으로 걸리는 사항용. 목표 문장으로 판별해 매 턴 붙는다.
-    //  넣기 전에 따져볼 것: 관련 없는 작업에서 읽어도 해가 없는 문장이면, 여기 말고
-    //  system_prompt 에 상시로 두는 편이 낫다(조건부 주입은 관리 비용이 있다).
-    //  주의: 키워드 매칭은 취약하다 — "휴지통에 넣어줘"는 '삭제'에 안 걸린다.
-    private val taskNotes = listOf<Pair<Regex, String>>(
-        // Regex("삭제|지워|delete|remove") to
-        //     "Deletion flows are two-step: after the delete tap, expect a confirmation " +
-        //     "dialog, and verify the item is gone from the list before finishing.",
-    )
     /** run_history.txt 에 남길 설정 요약. 지난 실행이 어떤 설정이었는지 알 수 있게 한다. */
     fun settingsLine() = "model=$model thinking=$thinkingLevel"
-
-    /** 목표 문장에 걸리는 참고사항. 목표는 실행 내내 안 바뀌므로 매 턴 같은 값이다. */
-    fun taskNote(task: String): String? =
-        taskNotes.firstOrNull { it.first.containsMatchIn(task) }?.second
 
     // ── 요청 조립 ────────────────────────────────────────────────
     private fun imageBlock(png: ByteArray) = JSONObject()
@@ -332,85 +318,177 @@ interface Executor {
     fun dispatch(name: String, args: JSONObject): JSONObject?
     fun confirm(explanation: String): Boolean
 
-    /** 지금 화면에 떠 있는 앱에만 해당하는 참고사항(없으면 null). 구현은 a11service.appNotes 참조. */
+    /** 지금 화면에 떠 있는 앱에만 해당하는 참고사항(없으면 null). */
     fun appNote(): String? = null
+
+    /**
+     * 목표 문장에 걸리는 참고사항(없으면 null). 목표는 실행 내내 안 바뀌므로 호출부가 캐시한다.
+     *
+     * 원래 CuClient 안의 하드코딩 목록이었는데 Unit 2 에서 여기로 옮겼다 — 판단 코어가
+     * 기억을 모르게 하려면 두 노트가 **같은 경계**를 지나야 한다.
+     *
+     * 넣기 전에 따져볼 것: 관련 없는 작업에서 읽어도 해가 없는 문장이면, 기억이 아니라
+     * system_prompt 에 상시로 두는 편이 낫다(조건부 주입은 관리 비용이 있다).
+     */
+    fun taskNote(task: String): String? = null
+
+    /**
+     * 기억을 읽다 **실패**했으면 사람에게 보일 한 줄(없으면 null). 한 번 주면 사라진다.
+     *
+     * 왜 계약에 넣나 — 읽기 실패는 조용히 삼켜지고 실행은 그대로 돈다. 그건 맞지만,
+     * 사용자 입장에선 "기억이 안 걸릴 만한 상황이었다"와 "기억 시스템이 고장 났다"가
+     * 구분이 안 된다. runAgent 는 기억을 모르므로 이 통로로만 알 수 있다.
+     */
+    fun noteFailure(): String? = null
 
     /** 지금 입력 포커스가 비밀 값 칸인가. **로그 마스킹 전용**이며 실행 흐름을 바꾸지 않는다.
      *  기본 false — 소켓 경로나 다른 구현체는 종전대로 동작한다. */
     fun isSecretFieldFocused(): Boolean = false
+
+    /** 지금 화면에 떠 있는 앱. **로깅 전용**이며 실행 흐름을 바꾸지 않는다.
+     *  기본 null — 소켓 경로나 다른 구현체는 종전대로 동작한다. */
+    fun foregroundApp(): Foreground? = null
 }
+
+/** 포그라운드 앱. versionCode 는 longVersionCode — 기억 무효화의 근거가 된다. */
+data class Foreground(val pkg: String, val versionCode: Long?)
+
+// ── 실행 기록 훅 (0단계 구조화 로깅) ──
+// runAgent 는 이 인터페이스만 알고 DB·Room 을 모른다. 기본 null 이라 소켓 경로·테스트는
+// 종전과 완전히 동일하게 돈다. 구현은 memory/RoomRunTrace.kt.
+// 설계: docs/reference/android_run-memory-2026-09-12.html
+interface RunTrace {
+    fun onRunStart(runId: String, task: String, model: String, thinking: String, maxTurns: Int)
+    fun onTurn(runId: String, rec: TurnRecord)
+    fun onRunEnd(runId: String, outcome: String, turnsUsed: Int)
+}
+
+/** 액션 1건의 기록. 좌표는 담지 않는다(설계 원칙 1). */
+data class TurnRecord(
+    val turn: Int,
+    val pkg: String?,
+    val pkgVersion: Long?,
+    val action: String?,
+    val intent: String?,
+    val result: String?,
+    val hadSafety: Boolean,
+    val note: String?,
+)
 
 // 목표를 완료까지 자율 실행. 좌표는 안 만짐 — 환산은 exec.dispatch 내부에서.
 // 반드시 백그라운드 스레드에서 호출(네트워크+제스처 latch).
-fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:(String)->Unit={}, cancel : () -> Boolean = {false}):String{
+fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:(String)->Unit={}, cancel : () -> Boolean = {false}, trace: RunTrace? = null):String{
     fun emit(s:String){android.util.Log.i("a11cu",s);log(s)}
     // 참고사항 두 갈래: 작업 유형(목표로 판별, 실행 내내 고정) + 현재 앱(턴마다 달라짐).
     // 둘 다 지금은 비어 있어 note == null 이고, 그때는 요청 본문이 종전과 완전히 동일하다.
-    val tNote = cu.taskNote(task)
+    val tNote = exec.taskNote(task)
     fun note(): String? = listOfNotNull(tNote, exec.appNote())
         .joinToString(" ").ifBlank { null }
 
-    var png = exec.screenshot()
-    var resp = cu.cuCall(cu.userInput(task, png, tNote), null)
-    var prevId = resp.optString("id")
-
-    for(turn in 1..maxTurns){
-        if (cancel()) { emit("[중단] 사용자 중단"); return "중단: 사용자 중단" }
-        val calls = cu.functionCalls(resp)
-        if(calls.isEmpty()){
-            val fin = cu.finalText(resp)
-            emit("[완료] $fin")
-            return "Done turn=$turn : $fin"
-        }
-        val results= JSONArray()
-        for (c in calls){
-            if (cancel()) { emit("[중단] 사용자 중단"); return "중단: 사용자 중단" }
-            val name = c.optString("name")
-            val callId = c.optString("id")
-            val args = c.optJSONObject("arguments") ?: JSONObject()
-            // 로그는 dispatch 보다 먼저 찍히므로, 게이트가 막아도 모델이 넣으려던 문자열은
-            // run_history.txt 에 남는다. 비밀번호 칸을 향한 값이면 여기서 가린다.
-            val mask = name == "type" && exec.isSecretFieldFocused()
-            emit("[턴 $turn] $name {${fmtArgs(args, mask)}}")
-
-            // ── 안전 확인(HITL): 위험 액션은 '실행 전'에 사용자 승인 ──
-            // safety_decision 위치가 스펙(arguments 안)과 실제(스텝 형제 필드)가 다를 수 있어 둘 다 본다.
-            val sd = c.optJSONObject("safety_decision") ?: args.optJSONObject("safety_decision")
-            val needConfirm = sd?.optString("decision") == "require_confirmation"
-            var safetyAck = false
-            if (needConfirm) {
-                val explanation = sd?.optString("explanation") ?: "되돌릴 수 없는 동작일 수 있습니다."
-                emit("[확인요청] $explanation")
-                if (!exec.confirm(explanation)) {            // 사용자 응답까지 블로킹
-                    // 거부는 서버에 되돌리지 않고 여기서 끝낸다.
-                    // require_confirmation 을 낸 호출은 '승인 표시가 붙은 요청'만 받아준다 —
-                    // 거부 사실을 function_result 로 보고하려 하면 그 요청 자체가 400 으로 거절된다.
-                    // (구글 문서 예제도 거부 시 루프를 break 한다.)
-                    emit("[거부] 사용자가 승인하지 않음 — 실행 중단")
-                    return "중단: 사용자가 승인하지 않음"
-                }
-                safetyAck = true                             // 승인됨 → function_result에 ack
-            }
-
-            val status = JSONObject().put("status","ok")
-            try {
-                val extra = exec.dispatch(name,args)
-                if(extra != null) for (k in extra.keys()) status.put(k,extra.get(k))
-            }catch(e: Exception){
-                status.put("status","error").put("error", e.message ?:"")
-                emit("⚠ dispatch실패 $name: ${e.message}")
-            }
-            Thread.sleep(600)
-            png = exec.screenshot()
-            // note() 는 스크린샷을 찍은 뒤 부른다 — 액션 실행 후의 포그라운드 앱 기준이어야
-            // 모델이 다음에 보게 될 화면과 메모가 같은 앱을 가리킨다.
-            cu.putResult(results, name, callId, png, status, safetyAck, note())
-        }
-        resp= cu.cuCall(results, prevId)
-        prevId = resp.optString("id")
+    // 주입된 기억을 로그에 남긴다 — **바뀔 때만.** 요청 본문은 폰에서 볼 수 없으므로
+    // 이 줄이 없으면 "기억이 정말 들어갔나"를 확인할 길이 없다. 반대로 매 턴 찍으면
+    // 같은 문장이 로그를 뒤덮어 실제 액션이 안 보인다.
+    //
+    // ★ 반드시 **실제로 보낸 것**만 넘길 것. 이 로그의 존재 이유가 "주입됐는지 믿을 수
+    //   있게 하는 것"이라, 안 실린 걸 찍으면 있느니만 못하다. 승인 턴이 그 경우다
+    //   (putResult 의 safetyAck 갈래는 note 를 안 붙인다).
+    var lastNote: String? = null
+    fun logNote(n: String?) {
+        if (n == lastNote) return
+        lastNote = n
+        if (n != null) emit("[기억] $n")
     }
-    emit("[중단] 최대 턴 도달")
-    return "STOP: max turns"
+
+    // ── 구조화 로깅(0단계). trace 가 null 이면 아래 호출은 전부 no-op 이라 종전과 동일하다.
+    //  종료 경로가 다섯 개(+예외)라 outcome 을 지역 변수로 모으고 finally 에서 한 번만 기록한다.
+    //  outcome 초기값이 "error" 인 이유: 예외로 빠져나가면 아무도 못 덮으므로 그대로 남아야 맞다.
+    val runId = java.util.UUID.randomUUID().toString()
+    trace?.onRunStart(runId, task, cu.model, cu.thinkingLevel, maxTurns)
+    var outcome = "error"
+    var turnsUsed = 0
+    fun finish(o: String, t: Int, msg: String): String { outcome = o; turnsUsed = t; return msg }
+
+    try {
+        var png = exec.screenshot()
+        logNote(tNote)
+        exec.noteFailure()?.let { emit("⚠ [기억] $it") }
+        var resp = cu.cuCall(cu.userInput(task, png, tNote), null)
+        var prevId = resp.optString("id")
+
+        for(turn in 1..maxTurns){
+            if (cancel()) { emit("[중단] 사용자 중단"); return finish("aborted", turn - 1, "중단: 사용자 중단") }
+            val calls = cu.functionCalls(resp)
+            if(calls.isEmpty()){
+                val fin = cu.finalText(resp)
+                emit("[완료] $fin")
+                return finish("success", turn - 1, "Done turn=$turn : $fin")
+            }
+            val results= JSONArray()
+            for (c in calls){
+                if (cancel()) { emit("[중단] 사용자 중단"); return finish("aborted", turn - 1, "중단: 사용자 중단") }
+                val name = c.optString("name")
+                val callId = c.optString("id")
+                val args = c.optJSONObject("arguments") ?: JSONObject()
+                // 로그는 dispatch 보다 먼저 찍히므로, 게이트가 막아도 모델이 넣으려던 문자열은
+                // run_history.txt 에 남는다. 비밀번호 칸을 향한 값이면 여기서 가린다.
+                val mask = name == "type" && exec.isSecretFieldFocused()
+                emit("[턴 $turn] $name {${fmtArgs(args, mask)}}")
+
+                // ── 안전 확인(HITL): 위험 액션은 '실행 전'에 사용자 승인 ──
+                // safety_decision 위치가 스펙(arguments 안)과 실제(스텝 형제 필드)가 다를 수 있어 둘 다 본다.
+                val sd = c.optJSONObject("safety_decision") ?: args.optJSONObject("safety_decision")
+                val needConfirm = sd?.optString("decision") == "require_confirmation"
+                var safetyAck = false
+                if (needConfirm) {
+                    val explanation = sd?.optString("explanation") ?: "되돌릴 수 없는 동작일 수 있습니다."
+                    emit("[확인요청] $explanation")
+                    if (!exec.confirm(explanation)) {            // 사용자 응답까지 블로킹
+                        // 거부는 서버에 되돌리지 않고 여기서 끝낸다.
+                        // require_confirmation 을 낸 호출은 '승인 표시가 붙은 요청'만 받아준다 —
+                        // 거부 사실을 function_result 로 보고하려 하면 그 요청 자체가 400 으로 거절된다.
+                        // (구글 문서 예제도 거부 시 루프를 break 한다.)
+                        emit("[거부] 사용자가 승인하지 않음 — 실행 중단")
+                        return finish("aborted", turn - 1, "중단: 사용자가 승인하지 않음")
+                    }
+                    safetyAck = true                             // 승인됨 → function_result에 ack
+                }
+
+                val status = JSONObject().put("status","ok")
+                try {
+                    val extra = exec.dispatch(name,args)
+                    if(extra != null) for (k in extra.keys()) status.put(k,extra.get(k))
+                }catch(e: Exception){
+                    status.put("status","error").put("error", e.message ?:"")
+                    emit("⚠ dispatch실패 $name: ${e.message}")
+                }
+                Thread.sleep(600)
+                png = exec.screenshot()
+                // note() 는 스크린샷을 찍은 뒤 부른다 — 액션 실행 후의 포그라운드 앱 기준이어야
+                // 모델이 다음에 보게 될 화면과 메모가 같은 앱을 가리킨다.
+                val turnNote = note()
+                // 승인 턴엔 note 가 안 실리므로(putResult) 로그에도 찍지 않는다. null 을
+                // 넘겨 lastNote 도 지운다 — 다음 턴에 다시 실리면 그건 '바뀐 것'이 맞다.
+                logNote(if (safetyAck) null else turnNote)
+                exec.noteFailure()?.let { emit("⚠ [기억] $it") }
+                cu.putResult(results, name, callId, png, status, safetyAck, turnNote)
+                // 액션 '실행 후' 기준으로 기록한다 — 모델이 다음에 볼 화면과 같은 시점이어야
+                // 나중에 로그를 읽을 때 "이 화면에서 이 액션이 나왔다"가 맞는 말이 된다.
+                val fg = exec.foregroundApp()
+                trace?.onTurn(runId, TurnRecord(
+                    turn = turn, pkg = fg?.pkg, pkgVersion = fg?.versionCode,
+                    action = name, intent = args.optString("intent").ifBlank { null },
+                    result = status.optString("status").ifBlank { null },
+                    hadSafety = needConfirm, note = turnNote,
+                ))
+            }
+            resp= cu.cuCall(results, prevId)
+            prevId = resp.optString("id")
+        }
+        emit("[중단] 최대 턴 도달")
+        return finish("fail", maxTurns, "STOP: max turns")
+    } finally {
+        trace?.onRunEnd(runId, outcome, turnsUsed)
+    }
 }
 
 private fun fmtArgs(o: JSONObject, maskText: Boolean = false): String {

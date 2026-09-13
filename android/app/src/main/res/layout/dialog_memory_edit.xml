@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 편집 다이얼로그. 스크롤 없이 두면 키보드가 올라올 때 '저장' 버튼이 화면 밖으로 밀린다. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="종류"
+            android:textSize="12sp"
+            android:alpha="0.7"/>
+
+        <Spinner
+            android:id="@+id/edKind"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="내용 — 모델에 이 문장이 그대로 들어간다"
+            android:textSize="12sp"
+            android:alpha="0.7"/>
+
+        <!-- 여러 줄 입력. maxLines 를 두지 않으면 긴 문장에서 다이얼로그가 화면을 넘는다. -->
+        <EditText
+            android:id="@+id/edText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="textMultiLine"
+            android:minLines="2"
+            android:maxLines="5"
+            android:hint="예: Wi-Fi settings are under the Connections menu."/>
+
+        <!-- APP_FACT 일 때만 보인다 -->
+        <LinearLayout
+            android:id="@+id/edPkgRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="10dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="패키지명 — 이 앱이 떠 있을 때만 주입된다"
+                android:textSize="12sp"
+                android:alpha="0.7"/>
+
+            <EditText
+                android:id="@+id/edPkg"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:hint="com.android.settings"/>
+        </LinearLayout>
+
+        <!-- PITFALL 일 때만 보인다 -->
+        <LinearLayout
+            android:id="@+id/edKeywordsRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="10dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="키워드 — 목표 문장에 이 중 하나가 있으면 주입된다 (쉼표)"
+                android:textSize="12sp"
+                android:alpha="0.7"/>
+
+            <EditText
+                android:id="@+id/edKeywords"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:hint="삭제, 지워, 휴지통"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="10dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="상태"
+                    android:textSize="12sp"
+                    android:alpha="0.7"/>
+
+                <Spinner
+                    android:id="@+id/edState"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="민감도"
+                    android:textSize="12sp"
+                    android:alpha="0.7"/>
+
+                <Spinner
+                    android:id="@+id/edSensitivity"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <CheckBox
+            android:id="@+id/edPinned"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="고정 — 자동 정리에서 제외"/>
+
+        <!-- 편집일 때만 채운다. 어디서 온 기억인지가 신뢰 판단의 근거다. -->
+        <TextView
+            android:id="@+id/edProvenance"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:textSize="11sp"
+            android:alpha="0.55"
+            android:visibility="gone"/>
+    </LinearLayout>
+</ScrollView>

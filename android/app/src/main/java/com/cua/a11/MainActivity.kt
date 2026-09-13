@@ -87,6 +87,9 @@ class MainActivity : AppCompatActivity() {
             logView.text = loadHistory()
             logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
         }
+        findViewById<Button>(R.id.memoryBtn).setOnClickListener {
+            startActivity(Intent(this, com.cua.a11.memory.MemoryActivity::class.java))
+        }
         clearBtn.setOnClickListener {
             logFile().delete()
             logView.text = "(로그 지움)"

@@ -1,0 +1,285 @@
+package com.cua.a11.memory
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
+import android.widget.BaseAdapter
+import android.widget.Button
+import android.widget.CheckBox
+import android.widget.EditText
+import android.widget.ListView
+import android.widget.Spinner
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import com.cua.a11.R
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.concurrent.thread
+
+/**
+ * 기억 목록 UI (Unit 3) — 폰 단독으로 기억을 **보고 고치고 지우는 유일한 창구**.
+ *
+ * 왜 자동 쓰기(Unit 5)보다 먼저인가: 순서가 반대면 리플렉터가 쌓아 놓은 것에 사용자가
+ * 손쓸 방법이 없는 기간이 생긴다. 지우는 길이 먼저 있어야 넣기 시작할 수 있다.
+ *
+ * Database Inspector 로도 같은 표를 볼 수 있지만 그건 **개발 도구지 제품이 아니다** —
+ * PC·안드로이드 스튜디오·USB 가 있어야 한다. 이 화면은 폰만으로 된다.
+ *
+ * 설계: docs/reference/android_run-memory-2026-09-12.html §8(사람의 개입)
+ */
+class MemoryActivity : AppCompatActivity() {
+
+    // a11service 와 같은 Room 싱글턴 위에 게이트웨이만 하나 더 얹는다.
+    // (MemoryDb.get 이 인스턴스를 하나로 유지하므로 DB 연결이 둘이 되지는 않는다.)
+    private val gateway by lazy { MemoryGateway(MemoryDb.get(this).dao()) }
+
+    private var rows: List<MemoryEntity> = emptyList()
+    private lateinit var adapter: RowAdapter
+
+    private lateinit var listView: ListView
+    private lateinit var summary: TextView
+    private lateinit var empty: TextView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_memory)
+
+        listView = findViewById(R.id.memList)
+        summary = findViewById(R.id.memSummary)
+        empty = findViewById(R.id.memEmpty)
+        adapter = RowAdapter()
+        listView.adapter = adapter
+
+        listView.setOnItemClickListener { _, _, pos, _ -> showEditor(rows[pos]) }
+
+        findViewById<Button>(R.id.memAddBtn).setOnClickListener { showEditor(null) }
+        findViewById<Button>(R.id.memClearBtn).setOnClickListener { confirmClearAll() }
+
+        reload()
+    }
+
+    /**
+     * 다른 화면에서 실행이 돌면 numRecalled 가 오른다. 돌아왔을 때 낡은 숫자가 남아 있으면
+     * "정말 주입됐나"를 이 화면으로 확인할 수 없으므로 매번 다시 읽는다.
+     */
+    override fun onResume() {
+        super.onResume()
+        if (::adapter.isInitialized) reload()
+    }
+
+    // ── 데이터 ────────────────────────────────────────────────────────
+    /** Room 은 메인 스레드에서 부르면 예외를 던진다 — 읽기도 반드시 백그라운드에서. */
+    private fun reload() = io({ gateway.list() }) { loaded ->
+        rows = loaded
+        adapter.notifyDataSetChanged()
+        val active = loaded.count { it.state == "ACTIVE" }
+        // '한 번도 안 걸린 것'을 요약에 올린다. 그 수가 크면 기억이 없는 게 아니라
+        // **검색 키(pkg·keywords)가 잘못 잡힌** 것일 가능성이 높다.
+        val never = loaded.count { it.state == "ACTIVE" && it.numRecalled == 0 }
+        summary.text = buildString {
+            append("총 ${loaded.size}건 (ACTIVE ${active}건")
+            if (never > 0) append(", 그중 ${never}건은 아직 안 걸림")
+            append(") · 항목을 누르면 고칠 수 있습니다")
+        }
+        empty.visibility = if (loaded.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * 백그라운드에서 [work], 결과를 UI 스레드에서 [then].
+     *
+     * **실패를 삼키지 않는다.** MemoryGateway 의 읽기 경로는 일부러 조용하지만(에이전트는
+     * 기억이 없어도 돌아야 하므로), 사람이 저장을 눌렀는데 조용히 실패하면 저장된 줄 알고
+     * 화면을 뜬다. 여기서는 토스트로 반드시 드러낸다.
+     */
+    private fun <T> io(work: () -> T, then: (T) -> Unit) {
+        thread {
+            try {
+                val r = work()
+                runOnUiThread { then(r) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "실패: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    // ── 목록 ──────────────────────────────────────────────────────────
+    private inner class RowAdapter : BaseAdapter() {
+        override fun getCount() = rows.size
+        override fun getItem(position: Int) = rows[position]
+        override fun getItemId(position: Int) = rows[position].id
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val v = convertView ?: LayoutInflater.from(this@MemoryActivity)
+                .inflate(R.layout.item_memory, parent, false)
+            val m = rows[position]
+
+            val head = StringBuilder("${m.kind} · ${m.state}")
+            if (m.pinned) head.append(" · 고정")
+            if (m.sensitivity != "normal") head.append(" · ${m.sensitivity}")
+            // 주입을 막는 사유는 목록에서 바로 보여야 한다. 안 그러면 사용자는 ACTIVE 인데
+            // 왜 안 나오는지 알 길이 없다.
+            if (m.invalidAt != null) head.append(" · 무효화됨")
+            v.findViewById<TextView>(R.id.rowHead).text = head
+
+            v.findViewById<TextView>(R.id.rowText).text = m.text
+
+            val key = if (m.kind == "PITFALL") "키워드 ${m.keywords ?: "-"}" else (m.pkg ?: "패키지 없음")
+            v.findViewById<TextView>(R.id.rowMeta).text =
+                "$key · ${m.source} · ${fmtDate(m.timeAdded)} 추가"
+
+            // lastAccessed 는 **주입된** 시각이다(목록에서 열어본 시각이 아니다).
+            // 0회가 오래 유지되면 검색 키를 의심해야 한다 — 다만 "그 상황이 아직
+            // 안 왔다"와는 구분되지 않으므로 판정이 아니라 신호로만 쓴다.
+            v.findViewById<TextView>(R.id.rowRecall).text = when {
+                m.state != "ACTIVE" -> "주입 대상 아님 (${m.state})"
+                m.numRecalled == 0 -> "아직 한 번도 안 걸림 — 검색 키를 확인해 보세요"
+                else -> "주입 ${m.numRecalled}회 · 마지막 ${m.lastAccessed?.let { fmtDate(it) } ?: "?"}"
+            }
+            return v
+        }
+    }
+
+    private fun fmtDate(ms: Long) =
+        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(ms))
+
+    // ── 편집 ──────────────────────────────────────────────────────────
+    /** [existing] 가 null 이면 새로 만들기. */
+    private fun showEditor(existing: MemoryEntity?) {
+        val v = layoutInflater.inflate(R.layout.dialog_memory_edit, null)
+        val kindSp = v.findViewById<Spinner>(R.id.edKind)
+        val textEd = v.findViewById<EditText>(R.id.edText)
+        val pkgRow = v.findViewById<View>(R.id.edPkgRow)
+        val pkgEd = v.findViewById<EditText>(R.id.edPkg)
+        val kwRow = v.findViewById<View>(R.id.edKeywordsRow)
+        val kwEd = v.findViewById<EditText>(R.id.edKeywords)
+        val stateSp = v.findViewById<Spinner>(R.id.edState)
+        val sensSp = v.findViewById<Spinner>(R.id.edSensitivity)
+        val pinnedCb = v.findViewById<CheckBox>(R.id.edPinned)
+        val prov = v.findViewById<TextView>(R.id.edProvenance)
+
+        fun fill(sp: Spinner, items: List<String>, want: String?) {
+            sp.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, items)
+            sp.setSelection(items.indexOf(want).coerceAtLeast(0))
+        }
+        fill(kindSp, MemoryGateway.KINDS, existing?.kind)
+        fill(stateSp, MemoryGateway.STATES, existing?.state ?: "ACTIVE")
+        fill(sensSp, MemoryGateway.SENSITIVITIES, existing?.sensitivity)
+
+        // 종류에 따라 검색 키가 다르다 — APP_FACT 는 패키지로, PITFALL 은 키워드로 걸린다.
+        // 둘 다 보여주면 엉뚱한 칸을 채우고 "저장은 됐는데 안 나온다"가 된다.
+        fun syncKeyRow() {
+            val isPitfall = kindSp.selectedItem?.toString() == "PITFALL"
+            pkgRow.visibility = if (isPitfall) View.GONE else View.VISIBLE
+            kwRow.visibility = if (isPitfall) View.VISIBLE else View.GONE
+        }
+        kindSp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, view: View?, pos: Int, id: Long) = syncKeyRow()
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+        syncKeyRow()
+
+        if (existing != null) {
+            textEd.setText(existing.text)
+            pkgEd.setText(existing.pkg ?: "")
+            kwEd.setText(existing.keywords ?: "")
+            pinnedCb.isChecked = existing.pinned
+            prov.visibility = View.VISIBLE
+            prov.text = buildString {
+                append("#${existing.id} · 출처 ${existing.source}")
+                existing.sourceRunId?.let { append(" · run ${it.take(8)}") }
+                append(" · 점수 ${existing.score} · 주입 ${existing.numRecalled}회")
+                existing.pkgVersion?.let { append("\n배울 당시 앱 버전 $it") }
+            }
+        } else {
+            // 사람이 직접 쓴 기억은 기본으로 고정한다 — Unit 8 의 자동 감쇠가 손으로 넣은
+            // 것을 조용히 강등시키면 안 된다. 체크는 풀 수 있다.
+            pinnedCb.isChecked = true
+        }
+
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "새 기억" else "기억 고치기")
+            .setView(v)
+            // ★ 리스너를 null 로 달고 아래 setOnShowListener 에서 다시 단다. 여기에 바로
+            //   달면 검증에 실패해도 다이얼로그가 닫혀 입력이 통째로 날아간다.
+            .setPositiveButton("저장", null)
+            .setNegativeButton("취소", null)
+            .apply { if (existing != null) setNeutralButton("삭제", null) }
+            .create()
+
+        dlg.setOnShowListener {
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val kind = kindSp.selectedItem?.toString() ?: return@setOnClickListener
+                val isPitfall = kind == "PITFALL"
+                // 안 쓰는 쪽 검색 키는 비워서 저장한다. 종류를 바꿔 저장하면 옛 키가 남아
+                // 목록에 유령 정보로 뜬다.
+                val draft = (existing ?: MemoryEntity(
+                    kind = kind, text = "", source = "user_ui",
+                    timeAdded = System.currentTimeMillis(),
+                )).copy(
+                    kind = kind,
+                    text = textEd.text.toString().trim(),
+                    pkg = if (isPitfall) null else pkgEd.text.toString().trim().ifBlank { null },
+                    keywords = if (isPitfall) kwEd.text.toString().trim().ifBlank { null } else null,
+                    state = stateSp.selectedItem?.toString() ?: "ACTIVE",
+                    sensitivity = sensSp.selectedItem?.toString() ?: "normal",
+                    pinned = pinnedCb.isChecked,
+                )
+                gateway.validate(draft)?.let { why ->
+                    AlertDialog.Builder(this).setMessage(why).setPositiveButton("확인", null).show()
+                    return@setOnClickListener
+                }
+                io({ gateway.save(draft) }) {
+                    dlg.dismiss()
+                    reload()
+                }
+            }
+            dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { dlg.dismiss() }
+            if (existing != null) {
+                dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                    confirmDelete(existing) { dlg.dismiss() }
+                }
+            }
+        }
+        dlg.show()
+    }
+
+    // ── 삭제 ──────────────────────────────────────────────────────────
+    private fun confirmDelete(m: MemoryEntity, onDone: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("이 기억을 지울까요?")
+            .setMessage(m.text)
+            .setPositiveButton("삭제") { _, _ ->
+                io({ gateway.delete(m.id) }) { onDone(); reload() }
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private fun confirmClearAll() {
+        if (rows.isEmpty()) {
+            Toast.makeText(this, "지울 기억이 없습니다.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("기억을 전부 지울까요?")
+            // 무엇이 남는지 명시한다 — '전부 삭제'가 실행 로그까지 지운다고 오해하기 쉽다.
+            .setMessage("${rows.size}건이 사라집니다. 되돌릴 수 없습니다.\n" +
+                    "실행 로그(run·episode)는 지워지지 않습니다.")
+            .setPositiveButton("전부 삭제") { _, _ ->
+                io({ gateway.deleteAll() }) { n ->
+                    Toast.makeText(this, "${n}건 삭제", Toast.LENGTH_SHORT).show()
+                    reload()
+                }
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+}

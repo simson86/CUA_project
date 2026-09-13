@@ -47,6 +47,13 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
     </service>
+        <!-- 기억 목록 UI. 런처에 안 띄운다 — MainActivity 에서만 들어간다. -->
+        <activity
+            android:name=".memory.MemoryActivity"
+            android:label="기억"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
