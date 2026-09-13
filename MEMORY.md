@@ -191,8 +191,21 @@ Unit 9 에서 `MemoryGateway.KINDS` 에 한 줄 더하면 열린다.
 것은 `guard` 의 catch 안 두 줄(깃발 대입)뿐이다. 다음에 스키마를 바꿀 때가 자연스러운
 기회다 — 그때 마이그레이션을 빼먹으면 이 경로가 실제로 돈다.
 
-**남은 것**: `PITFALL` 이 목표 문장에 걸려 주입되는 건 **안 봤다**(행 추가·삭제만 확인).
-`readForTask` 의 키워드 매칭은 Unit 4 에서 잰다.
+**`PITFALL` 경로도 확인** (같은 날). `APP_FACT` 와 **다른 함수**를 타고(`readForTask`)
+매칭도 SQL 이 아니라 코틀린 문자열 `contains` 라 따로 봐야 했다. 키워드 `settings` 짜리
+행을 넣고 `Open the Settings app` 실행:
+
+```
+[기억] PITFALL-TEST: …                      ← 턴 1 앞. taskNote 는 첫 요청부터 붙는다
+[턴 1] list_apps
+[턴 2] open_app com.android.settings
+[기억] PITFALL-TEST: … Use the search icon…  ← taskNote + appNote 가 합쳐짐
+```
+`episode.turn=1` 의 `note` 에 PITFALL 만, `turn=2` 에 둘 다 들어 있었다.
+**두 노트가 합쳐지는 것까지 이걸로 확인됐다** — 전엔 한 갈래씩만 봤다.
+
+⚠️ 확인한 건 **키워드가 목표에 그대로 들어 있을 때** 걸린다는 것뿐이다. 매칭이 부분
+문자열이라 `"휴지통에 넣어줘"` 는 `삭제` 에 안 걸린다 — 그 취약성은 그대로다(설계 §5).
 
 ## Gotchas — 기억 시스템 특유의 것
 
