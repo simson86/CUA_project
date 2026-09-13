@@ -23,8 +23,9 @@ interface MemoryDao {
     // ── 쓰기 ──────────────────────────────────────────────
     @Insert fun insertRun(run: RunEntity)
 
-    @Query("UPDATE run SET outcome = :outcome, turnsUsed = :turnsUsed, endedAt = :endedAt WHERE id = :id")
-    fun finishRun(id: String, outcome: String, turnsUsed: Int, endedAt: Long)
+    @Query("UPDATE run SET outcome = :outcome, turnsUsed = :turnsUsed, endedAt = :endedAt, " +
+           "memoryReadFailed = :memoryReadFailed WHERE id = :id")
+    fun finishRun(id: String, outcome: String, turnsUsed: Int, endedAt: Long, memoryReadFailed: Boolean)
 
     @Insert fun insertEpisode(ep: EpisodeEntity)
 
@@ -96,6 +97,10 @@ interface MemoryDao {
 
     /** 지운 행 수를 돌려준다. run·episode 는 건드리지 않는다 — 그쪽은 기억이 아니라 로그다. */
     @Query("DELETE FROM memory") fun deleteAllMemories(): Int
+
+    /** 기억 읽기가 실패한 실행 — Unit 4 의 측정에서 빼야 하는 것들. */
+    @Query("SELECT * FROM run WHERE memoryReadFailed = 1 ORDER BY startedAt DESC")
+    fun contaminatedRuns(): List<RunEntity>
 
     /** N2 — 앱 UI 변경 주기의 대리 지표. 패키지별로 관측된 서로 다른 버전 수. */
     @Query("SELECT pkg, COUNT(DISTINCT pkgVersion) AS versions FROM episode " +

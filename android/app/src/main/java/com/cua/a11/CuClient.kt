@@ -332,6 +332,15 @@ interface Executor {
      */
     fun taskNote(task: String): String? = null
 
+    /**
+     * 기억을 읽다 **실패**했으면 사람에게 보일 한 줄(없으면 null). 한 번 주면 사라진다.
+     *
+     * 왜 계약에 넣나 — 읽기 실패는 조용히 삼켜지고 실행은 그대로 돈다. 그건 맞지만,
+     * 사용자 입장에선 "기억이 안 걸릴 만한 상황이었다"와 "기억 시스템이 고장 났다"가
+     * 구분이 안 된다. runAgent 는 기억을 모르므로 이 통로로만 알 수 있다.
+     */
+    fun noteFailure(): String? = null
+
     /** 지금 입력 포커스가 비밀 값 칸인가. **로그 마스킹 전용**이며 실행 흐름을 바꾸지 않는다.
      *  기본 false — 소켓 경로나 다른 구현체는 종전대로 동작한다. */
     fun isSecretFieldFocused(): Boolean = false
@@ -402,6 +411,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
     try {
         var png = exec.screenshot()
         logNote(tNote)
+        exec.noteFailure()?.let { emit("⚠ [기억] $it") }
         var resp = cu.cuCall(cu.userInput(task, png, tNote), null)
         var prevId = resp.optString("id")
 
@@ -459,6 +469,7 @@ fun runAgent(exec: Executor, cu: CuClient, task: String, maxTurns: Int = 20,log:
                 // 승인 턴엔 note 가 안 실리므로(putResult) 로그에도 찍지 않는다. null 을
                 // 넘겨 lastNote 도 지운다 — 다음 턴에 다시 실리면 그건 '바뀐 것'이 맞다.
                 logNote(if (safetyAck) null else turnNote)
+                exec.noteFailure()?.let { emit("⚠ [기억] $it") }
                 cu.putResult(results, name, callId, png, status, safetyAck, turnNote)
                 // 액션 '실행 후' 기준으로 기록한다 — 모델이 다음에 볼 화면과 같은 시점이어야
                 // 나중에 로그를 읽을 때 "이 화면에서 이 액션이 나왔다"가 맞는 말이 된다.

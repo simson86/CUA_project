@@ -24,6 +24,21 @@ data class RunEntity(
     val turnsUsed: Int?,
     val startedAt: Long,
     val endedAt: Long?,
+
+    /**
+     * 이 실행 중에 기억 **읽기**가 예외로 실패했나. 종료 시점에 한 번 기록한다.
+     *
+     * 왜 필요한가 — 읽기 실패는 조용히 삼켜진다(MemoryGateway.guard). 그러면 "기억 있음"
+     * 조건으로 돌린 측정에 **기억이 안 들어간 실행**이 섞이고, Unit 4 는 그걸 "기억은
+     * 효과가 없다"로 읽는다. 오염된 실행을 빼내려면 표시가 남아 있어야 한다.
+     *
+     * `null` = 이 칸이 생기기 전의 실행(모름). `false` = 정상. `true` = 실패했음.
+     *
+     * ⚠️ **이 깃발은 "DB 는 살아 있는데 읽기가 실패한" 경우만 잡는다.** DB 가 통째로
+     * 죽으면 `onRunStart` 부터 실패해 **run 행 자체가 없다** — 그건 행의 부재로 알아채야
+     * 한다(측정에서 기대한 건수와 실제 건수를 대조할 것).
+     */
+    val memoryReadFailed: Boolean? = null,
     // 아래 둘은 Unit 9(생애주기)의 압축용. 지금은 항상 null 이다.
     val summary: String? = null,
     val compactedAt: Long? = null,
@@ -114,7 +129,10 @@ data class MemoryEntity(
  * v1 → v2: memory 테이블 추가. 기존 run·episode 는 건드리지 않는다.
  *
  * DDL 은 Room 이 기대하는 것과 **정확히** 같아야 한다(app/schemas/2.json 이 정답지).
- * 어긋나면 앱을 열자마자 IllegalStateException 으로 죽는다.
+ * ⚠️ **어긋나도 앱은 안 죽는다.** Room 은 build() 가 아니라 첫 쿼리에서 DB 를 여는데,
+ * 그 첫 쿼리가 RoomRunTrace.onRunStart(= swallow 안)라 IllegalStateException 이 삼켜진다.
+ * 앱은 멀쩡히 돌고 run·episode 만 조용히 안 쌓인다. 스키마를 바꾼 뒤에는 반드시
+ * `adb logcat -s a11mem:W` 를 보거나 '기억 관리' 화면을 열어 확인할 것.
  */
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -135,9 +153,23 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
+/**
+ * v2 → v3: run 에 memoryReadFailed 추가.
+ *
+ * **nullable 로 둔 이유**: `ALTER TABLE ADD COLUMN` 이 NOT NULL 이려면 DEFAULT 가 있어야
+ * 하는데, 그러면 엔티티에도 `@ColumnInfo(defaultValue=)` 를 달아야 스키마가 맞는다
+ * (이 파일 위쪽 주석의 "SQL DEFAULT 를 안 쓴다" 원칙과 충돌). 게다가 옛 행에 0 을 채우면
+ * "실패 안 했다"는 거짓말이 된다 — 그 실행들은 이 깃발이 없던 때의 것이라 **모르는** 게 맞다.
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `run` ADD COLUMN `memoryReadFailed` INTEGER")
+    }
+}
+
 @Database(
     entities = [RunEntity::class, EpisodeEntity::class, MemoryEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,   // app/schemas/ — 마이그레이션 DDL 의 정답지
 )
 abstract class MemoryDb : RoomDatabase() {
@@ -149,7 +181,7 @@ abstract class MemoryDb : RoomDatabase() {
         fun get(ctx: Context): MemoryDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 ctx.applicationContext, MemoryDb::class.java, "memory.db",
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
     }
 }

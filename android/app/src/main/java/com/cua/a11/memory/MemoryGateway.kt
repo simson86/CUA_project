@@ -100,11 +100,33 @@ class MemoryGateway(private val dao: MemoryDao) {
         return null
     }
 
+    // ── 읽기 실패 깃발 ───────────────────────────────────────────────────
+    //  삼키는 것과 숨기는 것은 다르다. 실행을 멈추지 않는 건 맞지만(아래 guard),
+    //  **아무도 모르게 두면 안 된다** — 기억이 안 들어간 실행이 "기억 있음" 측정에 섞이면
+    //  Unit 4 는 "기억은 효과가 없다"는 틀린 결론을 낸다.
+    //
+    //  알아야 할 곳이 둘이고 소비 시점이 달라 깃발도 둘이다:
+    //   · 실행 로그 — 사람이 그 자리에서 본다. 실패 직후 한 번 찍고 소비.
+    //   · run 행    — Unit 4 가 나중에 본다. 실행이 끝날 때 기록하고 소비.
+    @Volatile private var failureForLog: String? = null
+    @Volatile private var failureForRun = false
+
+    /** 사람에게 보일 한 줄. 한 번 가져가면 사라진다. */
+    fun takeFailureForLog(): String? = failureForLog.also { failureForLog = null }
+
+    /** run 행에 남길 값. 한 번 가져가면 사라지므로 **실행이 끝날 때 한 번만** 부를 것. */
+    fun takeFailureForRun(): Boolean = failureForRun.also { failureForRun = false }
+
     /**
      * 읽기 실패는 삼킨다. 기억이 없어서 못 붙는 것과 DB 가 깨져서 못 붙는 것은 **에이전트
      * 입장에서 같다** — 둘 다 note == null 이고 종전대로 돌면 된다. 실패를 터뜨려서 실행을
      * 멈추게 하는 쪽이 훨씬 나쁘다. 흔적은 logcat 에 남긴다.
      */
     private inline fun guard(body: () -> String?): String? =
-        try { body() } catch (e: Exception) { Log.w("a11mem", "기억 읽기 실패(무시)", e); null }
+        try { body() } catch (e: Exception) {
+            Log.w("a11mem", "기억 읽기 실패(무시)", e)
+            failureForLog = "읽기 실패 — 이번 실행은 기억 없이 진행합니다 (${e.javaClass.simpleName})"
+            failureForRun = true
+            null
+        }
 }

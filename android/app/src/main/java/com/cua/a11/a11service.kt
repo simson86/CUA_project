@@ -243,6 +243,8 @@ class a11service : AccessibilityService(), Executor {
 
     override fun taskNote(task: String): String? = gateway.readForTask(task)
 
+    override fun noteFailure(): String? = gateway.takeFailureForLog()
+
     // ── 구조화 로깅(0단계) ────────────────────────────────────────────────
     //  longVersionCode 는 기억 무효화의 근거다(설계 §7 4번). 지금은 기록만 하고 쓰지 않지만,
     //  안 적어두면 나중에 소급이 안 되므로 0단계부터 남긴다.
@@ -257,8 +259,10 @@ class a11service : AccessibilityService(), Executor {
 
     /** DB 는 처음 쓰일 때 만들어진다. trace 와 gateway 가 같은 인스턴스를 공유한다. */
     private val memoryDao by lazy { com.cua.a11.memory.MemoryDb.get(this).dao() }
-    private val runTrace: com.cua.a11.RunTrace by lazy { com.cua.a11.memory.RoomRunTrace(memoryDao) }
     private val gateway by lazy { com.cua.a11.memory.MemoryGateway(memoryDao) }
+    private val runTrace: com.cua.a11.RunTrace by lazy {
+        com.cua.a11.memory.RoomRunTrace(memoryDao, gateway)
+    }
 
     private fun captureOnce(): ByteArray {
         hideForShot()                          // 오버레이 숨기고 프레임 대기

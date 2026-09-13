@@ -31,4 +31,14 @@
         android:layout_marginTop="2dp"
         android:textSize="11sp"
         android:alpha="0.55"/>
+
+    <!-- 주입 이력. '한 번도 안 걸림'을 흐리게 두면 안 된다 — 그게 검색 키가 잘못
+         잡혔다는 유일한 신호다. 그래서 alpha 를 rowMeta 보다 높게 준다. -->
+    <TextView
+        android:id="@+id/rowRecall"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:textSize="11sp"
+        android:alpha="0.8"/>
 </LinearLayout>

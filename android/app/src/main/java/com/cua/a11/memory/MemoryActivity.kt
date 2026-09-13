@@ -79,7 +79,14 @@ class MemoryActivity : AppCompatActivity() {
         rows = loaded
         adapter.notifyDataSetChanged()
         val active = loaded.count { it.state == "ACTIVE" }
-        summary.text = "총 ${loaded.size}건 (ACTIVE ${active}건) · 항목을 누르면 고칠 수 있습니다"
+        // '한 번도 안 걸린 것'을 요약에 올린다. 그 수가 크면 기억이 없는 게 아니라
+        // **검색 키(pkg·keywords)가 잘못 잡힌** 것일 가능성이 높다.
+        val never = loaded.count { it.state == "ACTIVE" && it.numRecalled == 0 }
+        summary.text = buildString {
+            append("총 ${loaded.size}건 (ACTIVE ${active}건")
+            if (never > 0) append(", 그중 ${never}건은 아직 안 걸림")
+            append(") · 항목을 누르면 고칠 수 있습니다")
+        }
         empty.visibility = if (loaded.isEmpty()) View.VISIBLE else View.GONE
     }
 
@@ -126,7 +133,16 @@ class MemoryActivity : AppCompatActivity() {
 
             val key = if (m.kind == "PITFALL") "키워드 ${m.keywords ?: "-"}" else (m.pkg ?: "패키지 없음")
             v.findViewById<TextView>(R.id.rowMeta).text =
-                "$key · 주입 ${m.numRecalled}회 · ${m.source} · ${fmtDate(m.timeAdded)}"
+                "$key · ${m.source} · ${fmtDate(m.timeAdded)} 추가"
+
+            // lastAccessed 는 **주입된** 시각이다(목록에서 열어본 시각이 아니다).
+            // 0회가 오래 유지되면 검색 키를 의심해야 한다 — 다만 "그 상황이 아직
+            // 안 왔다"와는 구분되지 않으므로 판정이 아니라 신호로만 쓴다.
+            v.findViewById<TextView>(R.id.rowRecall).text = when {
+                m.state != "ACTIVE" -> "주입 대상 아님 (${m.state})"
+                m.numRecalled == 0 -> "아직 한 번도 안 걸림 — 검색 키를 확인해 보세요"
+                else -> "주입 ${m.numRecalled}회 · 마지막 ${m.lastAccessed?.let { fmtDate(it) } ?: "?"}"
+            }
             return v
         }
     }
