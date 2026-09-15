@@ -33,7 +33,9 @@ import time
 from datetime import datetime
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+    # line_buffering — 40분짜리 배치의 진행이 버퍼에 갇히면 안 된다. 중간에 멈췄는지
+    # 잘 돌고 있는지 알 방법이 없어진다.
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
 # ── 설계 (MEMORY.md 와 일치해야 한다) ────────────────────────────────
 MODEL = "gemini-3.5-flash"
@@ -48,26 +50,46 @@ SETTLE_S = 3                     # force-stop 뒤 화면이 정리될 시간
 RESULTS = os.path.join(os.path.dirname(__file__), "..", "docs", "bench",
                        "memory_ab.jsonl")
 
-# 조건 B 의 기억. **탐색 라운드를 돌기 전에는 비어 있는 게 맞다** —
-# 실행을 보고 쓴 문장이어야지, 미리 지어낸 문장이면 무엇을 재는지 알 수 없다.
+# 조건 B 의 기억 — 2026-09-16 탐색 라운드(6회)에서 관측한 것만 적었다. 지어낸 문장은 없다.
+#
+# ★ 셋 다 **'앱 UI 지도'** 급이다(앱 × 화면 수만큼 필요한, 가장 낮은 급). 탐색에서 낭비가
+#   거기서 났기 때문인데, 결과적으로 가장 방어하기 어려운 표본이다. 그래서 이 측정의 결과는
+#   "기억이 효과가 있다/없다"가 아니라 **"앱 UI 지도 급 지식이 값어치를 하는가"** 로 읽어야
+#   한다. 자세한 것은 MEMORY.md 의 '지식의 급' 절.
+#
+# ★ 전부 **서술문**이다 — "이렇게 해라"가 아니라 "이렇게 생겼다". 첫 초안의 멜론 문장이
+#   "검색하지 말고 최근 목록을 눌러라"였는데, 요청한 곡이 거기 없으면 **엉뚱한 곡을 튼다**.
+#   확인 단계를 건너뛰라고 지시하는 기억은 위험하다. 판단은 모델에게 남긴다.
 TASKS = [
     {
         "id": "melon",
         "goal": "멜론에서 이문세의 붉은 노을 틀어줘",
         "pkg": "com.iloen.melon",
-        "memories": [],
+        "memories": [{
+            "kind": "APP_FACT", "pkg": "com.iloen.melon",
+            "text": "The home screen lists recently played songs; a song already "
+                    "there can be played without searching.",
+        }],
     },
     {
         "id": "storage",
         "goal": "저장공간이 얼마나 남았는지 알려줘",
         "pkg": "com.android.settings",
-        "memories": [],
+        "memories": [{
+            "kind": "APP_FACT", "pkg": "com.android.settings",
+            "text": "Storage usage is under Device Care, near the bottom of the "
+                    "Settings list (Device Care -> Storage).",
+        }],
     },
     {
         "id": "musinsa",
         "goal": "무신사에서 윈드브레이커 검색해서 첫 번째 상품 이름이랑 가격 알려줘",
         "pkg": "com.musinsa.store",
-        "memories": [],
+        "memories": [{
+            "kind": "APP_FACT", "pkg": "com.musinsa.store",
+            "text": "On a product page the order from the top is: photos, brand, "
+                    "product name, rating, colour swatches, price.",
+        }],
     },
 ]
 
