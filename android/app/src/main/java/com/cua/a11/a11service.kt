@@ -66,6 +66,9 @@ class a11service : AccessibilityService(), Executor {
         //  (accept 루프에서 runAgent 를 그대로 돌린다) 그때 서버가 통째로 죽고,
         //  포트는 리스닝인데 아무 명령도 안 받는 상태가 된다 — 앱 재시작 전엔 안 풀린다.
         //  실측된 정상값: 캡처 ~0.3초. 아래 값은 넉넉한 상한일 뿐 튜닝 대상이 아니다.
+        /** 클라이언트가 명령 한 줄을 다 보낼 때까지의 상한. 보내다 만 연결이 스레드를
+         *  영원히 잡지 않게 한다. 정상값은 밀리초 단위다. */
+        const val CLIENT_READ_TIMEOUT_MS = 15_000
         const val CAPTURE_TIMEOUT_S = 10L
         const val GESTURE_TIMEOUT_S = 10L
         const val UI_POST_TIMEOUT_S = 5L
@@ -111,6 +114,16 @@ class a11service : AccessibilityService(), Executor {
      * 되면 셋 다 같이 옮겨야 한다.
      */
     @Volatile private var attended = true
+
+    /**
+     * 지금 에이전트가 돌고 있나. 앱 UI·소켓 양쪽이 세운다.
+     *
+     * 연결마다 스레드를 띄우게 되면서 **소켓 RUN 이 동시에 둘 들어올 수 있다.** 그러면
+     * 두 에이전트가 같은 화면을 서로 조작한다 — 화면도 기록도 엉킨다. 앱 UI 와 소켓이
+     * 겹치는 것도 마찬가지라 깃발 하나를 둘이 공유한다.
+     * (앱 UI 는 실행 중 버튼을 잠그지만 그건 UI 한 겹일 뿐이다.)
+     */
+    @Volatile private var agentBusy = false
     // 카드가 떠 있는 동안 에이전트 스레드는 latch 앞에서 자고 있어 cancel 깃발을 확인할 코드가
     // 돌지 않는다. 중단 버튼이 그 대기까지 깨워야 '눌러도 반응 없음'이 안 생긴다.
     @Volatile private var pendingLatch: CountDownLatch? = null
@@ -126,6 +139,9 @@ class a11service : AccessibilityService(), Executor {
                 log: (String) -> Unit = {}): String {
         // 지난 실행에서 중단 버튼이 눌렸으면 cancelled 가 true 로 남아 있다.
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
+        // ★ true 로 새면 이후 **모든** 실행이 영구히 막힌다. 반드시 finally 로 푼다.
+        if (agentBusy) return "이미 실행 중입니다. 끝난 뒤 다시 시도하세요."
+        agentBusy = true
         cancelled = false
         skipBlackPkgs.clear()      // "그냥 계속" 판단은 이번 실행에만 유효하다
         attended = true            // 앱에서 눌렀으니 사람이 보고 있다
@@ -144,6 +160,8 @@ class a11service : AccessibilityService(), Executor {
                 trace = runTrace)
         } catch (e: Exception) {
             "오류: ${e.message}"     // screenshot/네트워크 예외도 알림에 잡히게
+        } finally {
+            agentBusy = false
         }
         postOverlay(r)
         notifyDone(task, r)
@@ -792,14 +810,40 @@ class a11service : AccessibilityService(), Executor {
         startServer()
     }
 
+    /**
+     * 8080 소켓 서버. **연결마다 스레드를 띄운다.**
+     *
+     * 왜 — 예전엔 accept 루프에서 명령 처리까지 직접 했다. 그러면 처리 중 **한 군데라도
+     * 안 끝나면 서버가 통째로 죽는다**: 포트는 LISTEN 인데 아무 명령도 안 받고, 앱을
+     * 재시작하기 전엔 안 풀린다. 실제로 세 번 겪었고 매번 물린 자리가 달랐다 —
+     *   ① 인계 카드가 없는 사람을 3분 기다림   → attended 깃발로 해결
+     *   ② cuCall 이 5분 넘게 안 돌아옴          → callTimeout 으로 해결
+     *   ③ 응답을 쓰다 멈춤(자바 소켓엔 쓰기 타임아웃이 없다) → 여기, 구조로 해결
+     * 하나씩 막는 걸로는 안 끝난다는 게 ③에서 분명해졌다. 이제 물려도 **그 스레드만**
+     * 죽고 서버는 계속 명령을 받는다.
+     *
+     * 남은 구멍: 쓰기가 멈춘 스레드는 회수되지 않는다(자바 소켓에 쓰기 상한이 없어
+     * NIO 없이는 못 막는다). 스레드 하나가 새는 건 서버가 죽는 것보다 훨씬 낫다.
+     */
     private fun startServer() {
         thread(isDaemon = true) {
             val server = ServerSocket(8080)
             Log.d("A11y", "server listening on 8080")
             while (true) {
-                val client = server.accept()                       // PC 접속 대기
+                val client = try { server.accept() } catch (e: Exception) {
+                    Log.e("A11y", "accept 실패: ${e.message}"); continue
+                }
+                thread(isDaemon = true) { handleClient(client) }
+            }
+        }
+    }
+
+    private fun handleClient(client: Socket) {
+        run {
                 Log.d("A11y", "client connected: ${client.inetAddress}")
                 try {
+                    // 읽기 상한. 명령을 보내다 만 클라이언트가 이 스레드를 영원히 잡지 않게.
+                    client.soTimeout = CLIENT_READ_TIMEOUT_MS
                     // 클라이언트가 보낸 명령 한 줄을 읽는다. readLine()은 '\n'까지 읽고 개행은 뗀다.
 
 
@@ -851,6 +895,13 @@ class a11service : AccessibilityService(), Executor {
                             // 여기서 빠지면 정작 측정할 실행이 로그에 안 남는다.
                             // ★ 실행 단위 상태를 runTask 와 똑같이 초기화한다. 안 하면 지난 실행이
                             //   남긴 cancelled=true 를 물려받아 첫 턴에서 곧바로 중단된다.
+                            // ★ 연결마다 스레드라 RUN 이 동시에 둘 들어올 수 있다.
+                            //   두 에이전트가 같은 화면을 조작하면 화면도 기록도 엉킨다.
+                            if (agentBusy) {
+                                ackLine(client, "ERR 이미 실행 중입니다")
+                                return@run
+                            }
+                            agentBusy = true
                             cancelled = false
                             skipBlackPkgs.clear()
                             attended = false            // 소켓 = 지켜보는 사람이 없는 실행
@@ -868,6 +919,7 @@ class a11service : AccessibilityService(), Executor {
                                 "오류: ${e.message}"
                             } finally {
                                 attended = true         // 다음 앱 UI 실행이 무인으로 오해받지 않게
+                                agentBusy = false
                             }
                             client.getOutputStream().apply {
                                 write((result + "\n").toByteArray()); flush()
@@ -878,9 +930,8 @@ class a11service : AccessibilityService(), Executor {
                 } catch (e: Exception) {
                     Log.e("A11y", "client error: ${e.message}")
                 } finally {
-                    client.close()                                 // 이번 요청 끝 → 연결 정리
+                    try { client.close() } catch (_: Exception) {}  // 이번 요청 끝 → 연결 정리
                 }
-            }
         }
     }
     private fun pxX(norm: Int, w:Int) = (norm / 1000.0 * w).toInt()
