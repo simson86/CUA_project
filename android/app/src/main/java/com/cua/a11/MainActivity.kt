@@ -254,7 +254,8 @@ class MainActivity : AppCompatActivity() {
             startRun(input.text.toString().trim())
         }
     }
-    private fun logFile() = File(filesDir, "run_history.txt")
+    // 기록 파일의 위치·형식은 RunHistory 한 곳에 있다 — 트리거 실행도 같은 파일에 남기기 때문.
+    private fun logFile() = RunHistory.file(this)
     private val prefs by lazy { getSharedPreferences("cua", MODE_PRIVATE) }
 
     /** 음성 인식 후 자동 실행까지의 카운트다운. 취소·화면 이탈 때 반드시 cancel() 한다. */
@@ -295,10 +296,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 한 실행 로그를 타임스탬프+목표 헤더와 함께 파일 끝에 append. */
-    private fun saveLog(task: String, body: String) {
-        val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        logFile().appendText("===== $ts  |  $task =====\n$body\n\n")  // appendText=UTF-8
-    }
+    private fun saveLog(task: String, body: String) = RunHistory.append(this, task, body)
 
     private fun loadHistory(): String {
         val f = logFile()

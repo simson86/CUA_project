@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 접근성 버튼 트리거 카드(VoiceTriggerActivity).
+     화면 아래쪽에 붙인다 — 위쪽은 상태바·앱 헤더가 있고, 아래는 손가락이 닿는 곳이다.
+     바깥(triggerRoot)은 투명 창이라 뒤 앱이 어둡게 비친다. 바깥을 누르면 취소. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/triggerRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:id="@+id/triggerCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_margin="16dp"
+        android:background="@drawable/trigger_card_bg"
+        android:elevation="8dp"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- ★ 첫 스크린샷이 '지금 보던 앱'이라는 사실을 드러낸다. 이 기능의 핵심 가치이면서
+             동시에 사적인 화면이 그대로 모델에 간다는 뜻이라, 사용자가 알고 누르게 한다. -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Android_run · 지금 보고 있는 화면에서 작업합니다"
+            android:textAppearance="?attr/textAppearanceLabelMedium"
+            android:textColor="?attr/colorPrimary" />
+
+        <TextView
+            android:id="@+id/triggerStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minLines="2"
+            android:text="준비 중…"
+            android:textAppearance="?attr/textAppearanceBodyLarge"
+            android:textColor="?attr/colorOnSurface" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="end"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/triggerCancelBtn"
+                style="?attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="취소" />
+
+            <!-- 인식이 확정되기 전엔 누를 게 없으므로 꺼 둔다(onHeard 에서 켠다). -->
+            <Button
+                android:id="@+id/triggerOkBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:enabled="false"
+                android:text="지금 실행" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

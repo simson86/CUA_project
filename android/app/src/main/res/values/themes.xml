@@ -6,4 +6,19 @@
     </style>
 
     <style name="Theme.Android_run" parent="Base.Theme.Android_run" />
+
+    <!-- 접근성 버튼 트리거 카드(VoiceTriggerActivity) 전용 — 쓰던 앱 위에 카드만 떠야 한다.
+         부모를 앱 테마로 두는 이유: 다크 모드·?attr/colorSurface 색이 MainActivity 와 같아진다. -->
+    <style name="Theme.Android_run.VoiceTrigger" parent="Base.Theme.Android_run">
+        <!-- ★ windowIsTranslucent 가 핵심이다. 배경색만 투명하게 하면 뒤 앱이 안 보인다 —
+             액티비티 창은 기본이 불투명이라 시스템이 그 아래 창 그리기를 멈춘다. -->
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <!-- 뒤 앱을 살짝 어둡게 — 지금 입력을 받는 중이라는 신호 -->
+        <item name="android:backgroundDimEnabled">true</item>
+        <!-- 열고 닫는 애니메이션 없음. 닫힌 뒤 첫 캡처에 카드 잔상이 찍힐 여지를 줄인다.
+             없애 주지는 않는다 — 그래서 서비스가 TRIGGER_SETTLE_MS 를 따로 기다린다. -->
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

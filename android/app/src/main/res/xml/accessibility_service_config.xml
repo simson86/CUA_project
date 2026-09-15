@@ -5,4 +5,9 @@
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
     android:canTakeScreenshot="true"
+    android:accessibilityFlags="flagRequestAccessibilityButton"
     android:notificationTimeout="100" />
+<!-- flagRequestAccessibilityButton: 접근성 버튼을 받는다(a11service.buttonCallback — 콜백 등록 방식).
+     위 can* 능력들은 플래그가 아니라 별도 속성이라 이 줄의 영향을 안 받는다.
+     ★ 이 파일을 바꾸면 재설치만으로는 안 읽히는 기기가 있다 — 설정 > 접근성에서 서비스를 껐다 켤 것.
+       읽혔는지는 logcat 의 "accessibility button requested=true" 로 확인한다. -->

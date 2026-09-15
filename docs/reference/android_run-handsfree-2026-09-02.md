@@ -4,7 +4,8 @@
 저쪽은 "무엇이 가능한가", 이 문서는 "어떻게 짜는가"다. 설계 근거(핫워드가 왜 안 되는지,
 트리거 후보 6종 비교)는 반복하지 않으니 그쪽을 먼저 읽을 것.
 
-**상태: 코드 미적용.** 2026-09-02 작성. `minSdk = 30` 확인 — 접근성 버튼(API 26+)에
+**상태: 2026-09-15 코드 적용** — 실제로 무엇을 어떻게 바꿨는지는
+`android_run-handsfree-impl-2026-09-15.md`(구현 기록). 이 문서는 설계 가이드로 남긴다. 2026-09-02 작성. `minSdk = 30` 확인 — 접근성 버튼(API 26+)에
 버전 가드가 필요 없다.
 
 > **2026-09-15 갱신 — 새 main(PR #13~#15: 모델 3.7·3.8, 기억 시스템, 무인 실행) 기준으로 고쳤다.**
@@ -20,7 +21,7 @@
 
 ```
 [어느 앱에서든 접근성 버튼 탭]
-        ↓  a11service.onAccessibilityButtonClicked()
+        ↓  AccessibilityButtonCallback.onClicked (a11service 가 등록)
 [VoiceTriggerActivity]  투명 배경 + 화면 아래 작은 카드
         ↓  VoiceInput(이미 있음) 으로 듣기 → 실시간 자막 → 확정
 [3초 카운트다운 + 취소]           ← 안전선. 절대 빼지 않는다
@@ -81,15 +82,16 @@ a11service.runTaskWithSavedConfig(들은 말)
 ### (b) `a11service.kt`
 
 ```kotlin
-/**
- * 접근성 버튼(제스처 내비에선 화면에 뜨는 동그란 버튼, 3버튼 내비에선 내비바 안).
- * 시스템이 그리는 버튼이라 우리 오버레이의 터치 가로채기 문제와 무관하다.
- * config 의 flagRequestAccessibilityButton 과 짝이다 — 한쪽만 있으면 안 온다.
- */
-override fun onAccessibilityButtonClicked() {
-    Log.d("A11y", "accessibility button clicked")
-    ui.post { Toast.makeText(this, "트리거 도착", Toast.LENGTH_SHORT).show() }
+// ⚠️ 2026-09-15 정정 — 처음엔 `override fun onAccessibilityButtonClicked()` 로 적었는데
+//    그런 오버라이드는 **없다**(컴파일: 'overrides nothing'). 콜백 등록 방식이 맞다.
+private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
+    override fun onClicked(controller: AccessibilityButtonController) {
+        Log.d("A11y", "accessibility button clicked")
+        Toast.makeText(this@a11service, "트리거 도착", Toast.LENGTH_SHORT).show()
+    }
 }
+// onServiceConnected():  accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback, ui)
+// onUnbind():            accessibilityButtonController.unregisterAccessibilityButtonCallback(buttonCallback)
 ```
 
 `ui` 는 이미 서비스에 있는 메인 핸들러다(오버레이가 쓴다). Toast 는 메인 스레드에서만
@@ -303,13 +305,11 @@ class VoiceTriggerActivity : AppCompatActivity() {
 }
 ```
 
-`a11service.onAccessibilityButtonClicked()` 는 이제 토스트 대신:
+버튼 콜백의 `onClicked` 는 이제 토스트 대신:
 
 ```kotlin
-override fun onAccessibilityButtonClicked() {
-    startActivity(Intent(this, VoiceTriggerActivity::class.java)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))   // ★ 서비스에는 태스크가 없다. 없으면 예외
-}
+startActivity(Intent(this@a11service, VoiceTriggerActivity::class.java)
+    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))   // ★ 서비스에는 태스크가 없다. 없으면 예외
 ```
 
 ---
@@ -453,7 +453,7 @@ fun runTaskWithSavedConfig(task: String, log: (String) -> Unit = {}): String {
 
 | # | 할 것 | 확인 방법 | 안 되면 의심할 것 |
 |---|---|---|---|
-| 1 | `accessibilityFlags` + `onAccessibilityButtonClicked` 토스트 | 다른 앱에서 접근성 버튼 탭 → 토스트 | 설정에서 버튼 미지정 / 서비스 껐다 켜기 (§2-c) |
+| 1 | `accessibilityFlags` + 버튼 콜백 등록 토스트 | 다른 앱에서 접근성 버튼 탭 → 토스트 | 설정에서 버튼 미지정 / 서비스 껐다 켜기 (§2-c) |
 | 2 | `VoiceTriggerActivity` 띄우기만 (음성 없이) | 뒤 앱이 비쳐 보이는가, 닫으면 **원래 앱**으로 돌아가는가 | `taskAffinity=""` 누락, `windowIsTranslucent` 누락 (§3-b) |
 | 3 | `VoiceInput` 배선 | 실시간 자막이 카드에 찍히는가 | 마이크 권한, `<queries>` (이미 있음) |
 | 4 | `launchFromTrigger` + `RunConfig` | 첫 스크린샷에 **우리 카드가 없는가** — 로그의 첫 액션을 볼 것 | `TRIGGER_SETTLE_MS` 를 올려 본다 (§4) |
