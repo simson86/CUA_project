@@ -47,6 +47,22 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
     </service>
+        <!-- 접근성 버튼 트리거 카드. 접근성 서비스가 띄운다(외부에서 못 부르게 exported=false).
+             taskAffinity=""       ★ 없으면 MainActivity 와 같은 태스크에 들어가, 카드를 닫았을 때
+                                     쓰던 앱이 아니라 우리 앱 화면으로 돌아간다.
+             excludeFromRecents    최근 앱 목록에 카드가 남지 않게.
+             singleTask            버튼을 연타해도 카드가 쌓이지 않고 onNewIntent 로 온다.
+             stateAlwaysHidden     키보드가 올라오면 뒤 앱 레이아웃이 흐른다
+                                   (CLAUDE.md 「오버레이가 포커스를 뺏으면 승인한 탭이 빗나간다」). -->
+        <activity
+            android:name=".VoiceTriggerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Android_run.VoiceTrigger"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:windowSoftInputMode="stateAlwaysHidden" />
+
         <!-- 기억 목록 UI. 런처에 안 띄운다 — MainActivity 에서만 들어간다. -->
         <activity
             android:name=".memory.MemoryActivity"

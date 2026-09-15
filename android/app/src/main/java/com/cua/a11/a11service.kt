@@ -1,6 +1,7 @@
 package com.cua.a11
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityButtonController
 import android.view.accessibility.AccessibilityEvent
 import android.util.Log
 import android.view.Display
@@ -40,6 +41,7 @@ import android.widget.TextView
 import android.widget.FrameLayout
 import android.graphics.drawable.GradientDrawable
 import android.widget.LinearLayout
+import android.widget.Toast
 import java.util.concurrent.TimeUnit
 
 
@@ -75,6 +77,14 @@ class a11service : AccessibilityService(), Executor {
         // [직접 하겠습니다]를 누른 뒤 사용자가 인증할 시간. 짧으면 아직 잠긴 화면을 찍는다.
         const val HANDOVER_SELF_WAIT_MS = 5000L
 
+        // ── 접근성 버튼 트리거 ──────────────────────────────────
+        // 트리거 카드가 finish() 한 뒤 첫 캡처까지 기다리는 시간. 짧으면 첫 스크린샷에 우리 카드가
+        // 찍혀 모델이 그걸 조작하려 든다. 시작값일 뿐 실측으로 정할 것 — run_history 의 [턴 1]
+        // 액션이 카드 자리를 누르면 올린다. 속도 영향: 트리거 실행마다 한 번(턴당 비용 아님).
+        const val TRIGGER_SETTLE_MS = 600L
+        // runTask 가드에 걸렸을 때 돌려주는 문자열. "오류"로 시작해야 알림·화면이 실패로 읽는다.
+        const val BUSY_MESSAGE = "오류: 이미 실행 중입니다. 끝난 뒤 다시 시도하세요."
+
         // ── 자격증명 입력 인계 ──────────────────────────────────
         //  인계 카드(위)와 목적이 다르다. 저쪽은 '모델이 화면을 못 봄', 이쪽은 '모델이 값을 모름'.
         //  3분이 아니라 5분인 이유: 문자·메일로 오는 인증 코드를 기다려야 할 수 있다.
@@ -87,6 +97,7 @@ class a11service : AccessibilityService(), Executor {
     }
 
     override fun onUnbind(intent: Intent?): Boolean{
+        accessibilityButtonController.unregisterAccessibilityButtonCallback(buttonCallback)
         hideOverlay()
         instance = null
         return super.onUnbind(intent)
@@ -117,6 +128,20 @@ class a11service : AccessibilityService(), Executor {
     // 사용자가 "그냥 계속"을 고른 앱. 실행마다 초기화한다(runTask).
     private val skipBlackPkgs = java.util.Collections.synchronizedSet(HashSet<String>())
     fun requestCancel() { cancelled = true; pendingLatch?.countDown() }
+
+    /**
+     * 지금 실행 중인가(`runTask` 경로). 원래 없었다 — MainActivity 가 실행 버튼을 꺼서 막고 있었을 뿐이라,
+     * 액티비티를 안 거치는 접근성 버튼 트리거가 생기면서 겹치는 실행을 막을 곳이 필요해졌다.
+     *
+     * ★ AtomicBoolean + compareAndSet 인 이유: 트리거 카드가 이 값을 확인한 뒤 3초 카운트다운이
+     *   도는 사이에 앱에서 '실행'을 누를 수 있다. '확인'과 '시작'이 따로면 둘 다 통과한다.
+     *
+     * ⚠️ 소켓 `RUN` 은 runTask 를 안 거쳐 **이 가드 밖이다.** 무인 경로라 runTask 로 합치면 안 되고
+     *   (attended 가 true 로 바뀐다), 개발·측정용이라 그대로 둔다. `attended`·`cancelled` 가 실행 단위가
+     *   아니라 서비스 필드라는 한계(위 주석)와 같은 뿌리다.
+     */
+    private val running = java.util.concurrent.atomic.AtomicBoolean(false)
+    val isRunning: Boolean get() = running.get()
     // ★ log 는 반드시 맨 뒤 — MainActivity 가 trailing lambda 로 넘긴다.
     //   중간에 파라미터를 끼우면 `svc.runTask(task, maxTurns, model, thinking) { … }` 문법이 깨진다.
     // ★ 새 파라미터엔 기본값을 준다 — 소켓 RUN 경로와 기존 호출부가 안 깨지게.
@@ -124,6 +149,18 @@ class a11service : AccessibilityService(), Executor {
                 model: String = CuClient.DEFAULT_MODEL,
                 thinking: String = CuClient.DEFAULT_THINKING,
                 log: (String) -> Unit = {}): String {
+        // ★ 겹치는 실행을 막는다. 확인과 시작을 한 번에(compareAndSet) — running 주석 참조.
+        if (!running.compareAndSet(false, true)) return BUSY_MESSAGE
+        try {
+            return runTaskBody(task, maxTurns, model, thinking, log)
+        } finally {
+            running.set(false)   // ★ finally 가 아니면 예외 한 번에 영구히 '실행 중'으로 잠긴다
+        }
+    }
+
+    /** runTask 의 실제 몸통. 가드(running) 없이 부르지 말 것 — 겹치는 실행이 서로의 상태를 덮는다. */
+    private fun runTaskBody(task: String, maxTurns: Int, model: String, thinking: String,
+                            log: (String) -> Unit): String {
         // 지난 실행에서 중단 버튼이 눌렸으면 cancelled 가 true 로 남아 있다.
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
         cancelled = false
@@ -148,6 +185,73 @@ class a11service : AccessibilityService(), Executor {
         postOverlay(r)
         notifyDone(task, r)
         ui.postDelayed({ hideOverlay() }, 4000)   // 결과 4초 보여주고 닫음
+        return r
+    }
+
+    // ── 접근성 버튼 트리거 — 앱을 안 열고 작업 맡기기 ─────────────────────────
+    //  흐름: 버튼 → VoiceTriggerActivity(듣기·카운트다운) → launchFromTrigger → runTaskWithSavedConfig → runTask
+    //  근거·버린 대안(Google Assistant/Gemini): docs/reference/android_run-handsfree-impl-2026-09-15.md
+
+    /**
+     * 시스템이 그리는 접근성 버튼(제스처 내비: 떠 있는 동그란 버튼 / 3버튼 내비: 내비바 안).
+     * config 의 `flagRequestAccessibilityButton` 과 짝이다 — 한쪽만 있으면 안 온다.
+     * 우리 오버레이가 아니라서 에이전트의 탭을 가로채는 문제와 무관하다.
+     *
+     * ★ AccessibilityService 에 `onAccessibilityButtonClicked()` 같은 오버라이드는 **없다.**
+     *   설계 문서가 그렇게 적었다가 컴파일에서 'overrides nothing' 으로 걸렸다.
+     *   `AccessibilityButtonController` 에 콜백을 등록하는 방식이다 —
+     *   onServiceConnected 에서 등록, onUnbind 에서 해제.
+     */
+    private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
+        override fun onClicked(controller: AccessibilityButtonController) = onAccessibilityButton()
+        override fun onAvailabilityChanged(controller: AccessibilityButtonController, available: Boolean) {
+            // 버튼이 사라지는 경우(설정에서 해제, 다른 서비스가 가져감 등). "안 눌린다" 추적용 로그만.
+            Log.d("A11y", "accessibility button available=$available")
+        }
+    }
+
+    private fun onAccessibilityButton() {
+        Log.d("A11y", "accessibility button clicked (running=${running.get()})")
+        // ★ 마이크는 여기서 못 연다 — 접근성 서비스는 포그라운드가 아니다(Android 9+).
+        //   그래서 액티비티를 띄워 포그라운드 지위를 얻는다. 서비스에는 태스크가 없으니 NEW_TASK 필수.
+        //   (백그라운드 액티비티 실행 제한은 시스템이 바인딩한 서비스라 면제된다.)
+        startActivity(Intent(this, VoiceTriggerActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    /**
+     * 트리거 경로의 실행 진입점. VoiceTriggerActivity 가 finish() 한 직후에 부른다.
+     * 카드가 화면에서 실제로 사라질 시간을 준 뒤 시작한다 — finish() 는 종료를 예약할 뿐이라
+     * 곧바로 찍으면 첫 스크린샷에 카드가 남는다(CLAUDE.md 「오버레이 제거는 비동기」와 같은 함정).
+     */
+    fun launchFromTrigger(task: String) {
+        ui.postDelayed({
+            thread { runTaskWithSavedConfig(task) }   // 네트워크·대기가 있으므로 메인 스레드 금지
+        }, TRIGGER_SETTLE_MS)
+    }
+
+    /**
+     * 앱에서 마지막으로 고른 설정(모델·사고수준·최대 턴)으로 도는 실행.
+     * ★ 이름을 runTask 로 오버로드하지 말 것 — 기존 runTask 는 뒤 파라미터가 전부 기본값이라
+     *   `runTask(task) { … }` 가 두 후보에 다 맞아 '모호한 호출'로 컴파일이 깨진다.
+     * ★ runTask 를 거치므로 attended = true 로 돈다. 사람이 버튼을 누른 실행이니 맞다 —
+     *   인계·자격증명 카드가 뜨는 게 정상이다. 소켓처럼 runAgent 를 직접 부르면 무인 취급된다.
+     */
+    fun runTaskWithSavedConfig(task: String): String {
+        val c = RunConfig.load(this)
+        val buf = StringBuilder("[경로] 접근성 버튼\n")   // run_history 에서 앱 UI 실행과 구분
+        val r = runTask(task, c.maxTurns, c.model, c.thinking) { line -> buf.append(line).append('\n') }
+        if (r == BUSY_MESSAGE) {
+            // 카드가 확인한 뒤 카운트다운 사이에 다른 실행이 시작된 경우. runTask 는 알림 없이
+            // 돌아오므로, 여기서 알리지 않으면 사용자는 아무 일도 안 일어난 줄 안다.
+            ui.post { Toast.makeText(this, r, Toast.LENGTH_LONG).show() }
+            return r
+        }
+        buf.append(r).append('\n')
+        // 앱 UI 경로는 MainActivity 가 저장한다. 이 경로엔 액티비티가 없으니 여기서 남긴다.
+        // 기록 실패가 실행 결과를 뒤집으면 안 되므로 삼키되 로그는 남긴다.
+        try { RunHistory.append(this, task, buf.toString()) }
+        catch (e: Exception) { Log.w("A11y", "run_history 저장 실패: ${e.message}") }
         return r
     }
 
@@ -787,7 +891,13 @@ class a11service : AccessibilityService(), Executor {
     }
     override fun onServiceConnected() {
         Log.d("A11y", "connected")
+        // 접근성 버튼 플래그가 실제로 읽혔는지. config 를 바꾼 뒤 서비스를 껐다 켜지 않으면 옛 설정이
+        // 남아 있어 false 가 나온다 — "버튼이 안 눌린다"를 코드 탓과 설정 탓으로 바로 가르려고 남긴다.
+        Log.d("A11y", "accessibility button requested=" + ((serviceInfo?.flags ?: 0) and
+            android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_ACCESSIBILITY_BUTTON != 0))
         instance = this
+        // 접근성 버튼 콜백. 메인 스레드 핸들러로 받는다 — 콜백 안에서 startActivity 를 부르므로.
+        accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback, ui)
         createChannel()
         startServer()
     }

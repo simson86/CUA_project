@@ -254,7 +254,8 @@ class MainActivity : AppCompatActivity() {
             startRun(input.text.toString().trim())
         }
     }
-    private fun logFile() = File(filesDir, "run_history.txt")
+    // 기록 파일의 위치·형식은 RunHistory 한 곳에 있다 — 트리거 실행도 같은 파일에 남기기 때문.
+    private fun logFile() = RunHistory.file(this)
     private val prefs by lazy { getSharedPreferences("cua", MODE_PRIVATE) }
 
     /** 음성 인식 후 자동 실행까지의 카운트다운. 취소·화면 이탈 때 반드시 cancel() 한다. */
@@ -272,10 +273,19 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onStop() {
         super.onStop()
+        // ★ 끊었으면 화면에도 남겨야 한다. 타이머만 죽이면 마지막 틱("1초 뒤 실행합니다 — …")이
+        //   그대로 얼어붙어, 돌아온 사용자는 곧 실행되는 줄 안다. 실제로는 이미 취소된 상태다.
+        //   조건을 다는 이유: 실행 중에 홈으로 나갔다 오는 경우까지 이 문구가 덮으면
+        //   "실행 중…"이나 실행 결과가 지워진다. 정말 뭔가를 취소했을 때만 쓴다.
+        val cancelledSomething = countdown != null || voice?.isListening == true
         countdown?.cancel()
         countdown = null
         findViewById<Button>(R.id.cancelBtn)?.visibility = View.GONE
         voice?.cancel()
+        if (cancelledSomething) {
+            findViewById<TextView>(R.id.resultView)?.text =
+                "앱을 벗어나 자동 실행이 취소되었습니다.\n그대로 실행하려면 ‘실행’을 누르세요."
+        }
     }
 
     /** SpeechRecognizer 는 destroy 하지 않으면 인식 서비스 바인딩이 남는다. */
@@ -286,10 +296,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 한 실행 로그를 타임스탬프+목표 헤더와 함께 파일 끝에 append. */
-    private fun saveLog(task: String, body: String) {
-        val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        logFile().appendText("===== $ts  |  $task =====\n$body\n\n")  // appendText=UTF-8
-    }
+    private fun saveLog(task: String, body: String) = RunHistory.append(this, task, body)
 
     private fun loadHistory(): String {
         val f = logFile()

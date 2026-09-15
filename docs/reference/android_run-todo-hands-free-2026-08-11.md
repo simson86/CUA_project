@@ -2,6 +2,10 @@
 
 **상태: 설계만. 미구현.** 2026-08-11 논의 기록.
 
+> **후속:** 구현 가이드는 `android_run-handsfree-2026-09-02.md` 로 갔다.
+> 이 문서는 "무엇이 가능한가"(타당성·트리거 후보 비교)를 남기고, "어떻게 짜는가"는
+> 그쪽에 있다. 착수할 땐 그쪽을 볼 것.
+
 지금은 앱을 열고 → 목표를 말하거나 치고 → 실행을 눌러야 한다. 목표는 **쓰던 앱에서
 그대로** 작업을 맡기는 것.
 
@@ -50,7 +54,12 @@ android:accessibilityFlags="flagRequestAccessibilityButton"
 ```
 ```kotlin
 // a11service.kt
-override fun onAccessibilityButtonClicked() { /* 트리거 */ }
+// ⚠️ 2026-09-15 정정 — 처음 적은 `override fun onAccessibilityButtonClicked()` 는 존재하지 않는다
+//    (컴파일: 'overrides nothing'). AccessibilityButtonController 에 콜백을 등록해야 한다.
+accessibilityButtonController.registerAccessibilityButtonCallback(
+    object : AccessibilityButtonController.AccessibilityButtonCallback() {
+        override fun onClicked(controller: AccessibilityButtonController) { /* 트리거 */ }
+    }, ui)
 ```
 
 시스템이 그리는 버튼이라 우리 오버레이의 터치 가로채기 문제(`CLAUDE.md` 참조)가 없다.
@@ -112,7 +121,7 @@ override fun onAccessibilityButtonClicked() { /* 트리거 */ }
 
 ## §5 착수 순서 (제안)
 
-1. 접근성 플로팅 버튼만 붙여 `onAccessibilityButtonClicked` 에서 토스트 — 트리거가
+1. 접근성 플로팅 버튼만 붙여 버튼 콜백(`AccessibilityButtonCallback.onClicked`)에서 토스트 — 트리거가
    실제로 오는지부터 확인
 2. `VoiceTriggerActivity`(투명) 추가, `VoiceInput` 재사용, 인식만 되는지 확인
 3. 설정 읽기를 서비스로 이동 (§4-c)

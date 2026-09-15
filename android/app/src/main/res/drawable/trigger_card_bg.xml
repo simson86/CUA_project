@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 트리거 카드 배경. 색은 테마에서 받는다 — 다크 모드에서 흰 카드가 번쩍 뜨지 않게.
+     모양이 있는 배경이어야 elevation 그림자가 둥근 모서리를 따라간다. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="?attr/colorSurface" />
+    <corners android:radius="16dp" />
+</shape>
