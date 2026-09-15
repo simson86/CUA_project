@@ -828,6 +828,23 @@ class a11service : AccessibilityService(), Executor {
                         "HOME"      -> { performGlobalAction(GLOBAL_ACTION_HOME); ackOK(client) }
                         "RECENTS"   -> { performGlobalAction(GLOBAL_ACTION_RECENTS); ackOK(client) }
                         "OPEN"      -> { openApp(p[1]); ackOK(client) }
+
+                        // ── 측정 하네스용 (Unit 4) ──────────────────────────
+                        //  기억을 PC 에서 세웠다 비웠다 할 수 있어야 A/B 를 **번갈아** 돌린다.
+                        //  손으로 목록 UI 를 만져야 하면 배치를 A 5회 / B 5회로 쪼갤 수밖에 없고,
+                        //  그러면 시간대·앱 학습 효과가 조건에 엮인다.
+                        //  ★ 전부 bench{} 로 감싼다. 예외를 그냥 튀우면 바깥 catch 가 로그만
+                        //    남기고 연결을 닫아, PC 는 **빈 응답**만 본다. 그러면 러너가
+                        //    "기억이 거절됐다"와 "연결이 죽었다"를 구분할 수 없고, 조건 B 가
+                        //    조용히 비어 있는 채로 측정이 돌아간다.
+                        "MEMCLEAR"  -> bench(client) { "OK ${gateway.deleteAll()}" }
+                        "MEMADD"    -> bench(client) {
+                            // JSON 에 공백이 있으므로 split 이 아니라 첫 공백 뒤 전체를 쓴다.
+                            val body = line.trim().substringAfter(" ")
+                            "OK ${gateway.addFromJson(org.json.JSONObject(body))}"
+                        }
+                        "MEMCOUNT"  -> bench(client) { "OK ${gateway.count()}" }
+                        "DUMP"      -> bench(client) { dumpLastRun() }
                         "RUN" -> {
                             val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
                             // 소켓 경로도 기록한다 — tools/bench_*.py 가 이쪽을 쓰므로
@@ -916,7 +933,71 @@ class a11service : AccessibilityService(), Executor {
         val out = client.getOutputStream()
         out.write("OK\n".toByteArray());out.flush()
     }
+
+    /**
+     * 측정 명령의 응답. 성공이면 [body] 가 돌려준 줄을, 실패면 `ERR <사유>` 를 보낸다.
+     *
+     * **반드시 한 줄이 나가야 한다.** 러너는 응답으로만 상태를 아는데, 빈 응답은
+     * "거절됐다"와 "연결이 죽었다"를 구분해 주지 못한다. 특히 MEMADD 가 조용히 실패하면
+     * 조건 B 에 기억이 없는 채로 측정이 돌아가 **"기억은 효과가 없다"는 틀린 결론**이 난다.
+     */
+    private inline fun bench(client: Socket, body: () -> String) {
+        val reply = try { body() } catch (e: Exception) {
+            Log.w("A11y", "bench 명령 실패", e)
+            "ERR " + (e.message ?: e.javaClass.simpleName).lines().joinToString(" ")
+        }
+        ackLine(client, reply)
+    }
+
+    /** 한 줄 응답. toByteArray() 는 UTF-8 이라 한글이 그대로 간다. */
+    private fun ackLine(client: Socket, s: String) {
+        val out = client.getOutputStream()
+        out.write((s + "\n").toByteArray()); out.flush()
+    }
+
+    /**
+     * 마지막 run 1건 + 그 턴들을 JSON 한 줄로. 측정 스크립트가 결과를 프로그램으로 읽는다.
+     *
+     * 왜 turnsUsed 만으로 안 되나 — 탐색 라운드에서 **어디서 턴을 낭비했는지**를 봐야
+     * 기억 문장을 쓸 수 있다. episode 를 같이 실어야 그걸 눈이 아니라 스크립트로 읽는다.
+     *
+     * memoryCount 를 함께 싣는 이유: 조건 A 가 **정말 0건이었는지** 실행마다 확인해야 한다.
+     * 확인하지 않으면 A 와 B 가 같은 조건이었던 실행이 섞여도 알 수 없다.
+     */
+    private fun dumpLastRun(): String = try {
+        val r = memoryDao.recentRuns(1).firstOrNull()
+            ?: return org.json.JSONObject().put("error", "run 행이 없다").toString()
+        val eps = org.json.JSONArray()
+        for (e in memoryDao.episodesOf(r.id)) {
+            eps.put(org.json.JSONObject()
+                .put("turn", e.turn).put("pkg", e.pkg ?: org.json.JSONObject.NULL)
+                .put("action", e.action ?: org.json.JSONObject.NULL)
+                .put("intent", e.intent ?: org.json.JSONObject.NULL)
+                .put("result", e.result ?: org.json.JSONObject.NULL)
+                .put("note", e.note ?: org.json.JSONObject.NULL))
+        }
+        org.json.JSONObject()
+            .put("runId", r.id).put("goal", r.goal)
+            .put("model", r.model).put("thinking", r.thinking).put("maxTurns", r.maxTurns)
+            .put("outcome", r.outcome ?: org.json.JSONObject.NULL)
+            .put("turnsUsed", r.turnsUsed ?: org.json.JSONObject.NULL)
+            .put("startedAt", r.startedAt).put("endedAt", r.endedAt ?: org.json.JSONObject.NULL)
+            .put("memoryReadFailed", r.memoryReadFailed ?: org.json.JSONObject.NULL)
+            .put("memoryCount", memoryDao.memoryCount())
+            .put("episodes", eps)
+            .toString()
+    } catch (e: Exception) {
+        // 여기서 던지면 바깥 catch 가 연결을 닫아 PC 는 '빈 응답'만 본다.
+        org.json.JSONObject().put("error", e.message ?: e.javaClass.simpleName).toString()
+    }
     override fun confirm(explanation: String): Boolean {
+        // 무인 실행에는 승인할 사람이 없다. 60초(아래 latch)를 기다려 봐야 결국 미승인이므로
+        // 지금 거부한다. **자동 승인은 절대 안 된다** — 지켜보는 사람이 없을수록 더 그렇다.
+        // 인계·자격증명 카드와 같은 원칙이고, 소켓 수정(2026-09-13) 때 여기만 빠졌었다.
+        if (!attended) {
+            Log.w("A11y", "무인 실행 — 확인 카드를 안 띄우고 거부한다: $explanation")
+            return false
+        }
         if (!Settings.canDrawOverlays(this)) return false   // 권한 없으면 안전하게 거부
         val latch = CountDownLatch(1)
         var approved = false

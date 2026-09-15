@@ -79,6 +79,32 @@ class MemoryGateway(private val dao: MemoryDao) {
     /** 기억만 지운다. run·episode(실행 로그)는 남는다. */
     fun deleteAll(): Int = dao.deleteAllMemories()
 
+    fun count(): Int = dao.memoryCount()
+
+    /**
+     * 측정 하네스(Unit 4)가 조건 B 를 세울 때 쓰는 입구. JSON 한 줄을 받아 한 건 넣는다.
+     *
+     * **반드시 save() 를 지난다** — DAO 를 직접 부르면 validate() 를 우회하고, 그러면
+     * 러너가 *읽기에 절대 안 걸리는 기억*을 넣고도 성공으로 받는다. 그 상태로 측정하면
+     * **조건 B 가 사실상 A 가 되고, 결과는 "기억은 효과가 없다"로 조용히 틀린다.**
+     *
+     * `source = "bench"` 로 표시해 둔다. 사람이 손으로 넣은 것(`user_ui`)과 섞이면
+     * 측정이 끝난 뒤 무엇을 지워야 할지 알 수 없다 — 목록 UI 에서 바로 구분된다.
+     * (지금 `source` 로 분기하는 코드는 없다. 순전히 출처 표시다.)
+     */
+    fun addFromJson(json: org.json.JSONObject): Long = save(
+        MemoryEntity(
+            kind = json.getString("kind"),
+            text = json.getString("text"),
+            pkg = json.optString("pkg").ifBlank { null },
+            keywords = json.optString("keywords").ifBlank { null },
+            state = json.optString("state").ifBlank { "ACTIVE" },
+            sensitivity = json.optString("sensitivity").ifBlank { "normal" },
+            source = "bench",
+            timeAdded = System.currentTimeMillis(),
+        )
+    )
+
     /**
      * 저장해도 되는 행인가. 통과면 null, 아니면 사용자에게 보여줄 이유.
      *
