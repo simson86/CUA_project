@@ -47,8 +47,10 @@ class VoiceTriggerActivity : AppCompatActivity() {
         // ── 시작 전 점검. 걸리면 이유를 보여 주고 접는다 ──
         val svc = a11service.instance
             ?: return failAndFinish("접근성 서비스가 꺼져 있습니다.")
-        // 실행 중에 새 지시를 받으면 두 에이전트가 같은 화면을 만진다. (runTask 가 한 번 더 막는다)
-        if (svc.isRunning) return failAndFinish("이미 실행 중입니다. 끝난 뒤 다시 눌러 주세요.")
+        // 실행 중이면 새 지시 대신 **중단**을 제안한다. 새 지시를 받으면 두 에이전트가 같은 화면을
+        // 만지고(runTask 가 한 번 더 막는다), 멈출 방법이 '앱을 열어 중단 버튼'뿐이면 앱을 찾는
+        // 사이에도 에이전트는 계속 화면을 조작한다.
+        if (svc.isRunning) return showRunning(svc)
         // ★ 오버레이 권한 없이 돌리면 안 된다 — 위험 액션 확인 카드·인계 카드가 전부 오버레이다.
         //   권한이 없으면 그 카드들이 안 떠서, 사용자가 볼 수도 멈출 수도 없는 실행이 된다.
         //   MainActivity 도 같은 이유로 이 권한 없이는 실행을 안 시작한다.
@@ -83,6 +85,38 @@ class VoiceTriggerActivity : AppCompatActivity() {
             voice?.stop()
             status.text = "인식 중…"
         }
+    }
+
+    /**
+     * 실행 중에 버튼을 누른 경우 — `[중단]` / `[닫기]`.
+     *
+     * ★ 중단은 **협조적 취소**다(`requestCancel`). 진행 중인 단계(API 응답 대기 등)가 끝나야 멈추므로
+     *   "멈췄다"가 아니라 "요청됐다"고 말한다. MainActivity 의 중단 버튼과 같은 문구·같은 함수다.
+     *
+     * ⚠️ 이 카드가 떠 있는 동안에도 에이전트는 돌고 있어 **다음 스크린샷에 이 카드가 찍힌다.**
+     *   모델이 카드를 보고 헤매거나 버튼을 누를 수 있다. 그래서 고르면 곧바로 닫고, 안 골라도
+     *   [RUNNING_CARD_TIMEOUT_MS] 뒤 스스로 닫는다. 에이전트가 접근성 버튼을 잘못 눌러 이 카드를
+     *   연 경우에도 화면이 영영 막히지 않게 하는 장치이기도 하다.
+     */
+    private fun showRunning(svc: a11service) {
+        val cancelBtn = findViewById<Button>(R.id.triggerCancelBtn)
+        status.text = "지금 작업을 실행 중입니다. 멈출까요?"
+        cancelBtn.text = "닫기"
+        okBtn.text = "중단"
+        okBtn.isEnabled = true
+        okBtn.setOnClickListener {
+            okBtn.isEnabled = false
+            cancelBtn.isEnabled = false
+            if (!svc.isRunning) {
+                // 카드를 보는 사이에 실행이 끝났다. 없는 실행을 "중단 요청됨"이라 하면 거짓이 된다.
+                status.text = "실행이 이미 끝났습니다."
+            } else {
+                svc.requestCancel()
+                status.text = "중단 요청됨 — 현재 단계가 끝나면 멈춥니다."
+            }
+            status.postDelayed({ if (!isFinishing) finish() }, STOP_SHOW_MS)
+        }
+        status.postDelayed({ if (!isFinishing) finish() }, RUNNING_CARD_TIMEOUT_MS)
     }
 
     private fun onHeard(said: String) {
@@ -141,5 +175,10 @@ class VoiceTriggerActivity : AppCompatActivity() {
 
     private companion object {
         const val FAIL_SHOW_MS = 2500L
+        // [중단]을 누른 뒤 확인 문구를 보여 주는 시간. 짧게 — 실행 중이라 카드가 스크린샷에 찍힌다.
+        const val STOP_SHOW_MS = 1200L
+        // 실행 중 카드가 아무것도 안 고른 채 떠 있을 최대 시간. 사람이 고를 시간은 주되,
+        // 에이전트 화면을 오래 가리지 않게.
+        const val RUNNING_CARD_TIMEOUT_MS = 8000L
     }
 }
