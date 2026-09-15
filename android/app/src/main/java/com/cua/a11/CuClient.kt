@@ -134,6 +134,14 @@ class CuClient(private val apiKey : String,
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)   // 모델 추론 대기(루프 한 턴)
+        // ★ readTimeout 만으로는 '요청 하나'의 상한이 안 생긴다 — 그건 **한 번의 read**
+        //   기준이라 데이터가 찔끔찔끔 오거나 OkHttp 가 재연결하면 매번 리셋된다.
+        //   실측 2026-09-16: 한 턴이 5분 넘게 안 돌아왔다(readTimeout 은 60초였다).
+        //   이 코드베이스에서 그 대가가 유난히 크다 — 소켓 서버가 단일 스레드라
+        //   accept 루프에서 runAgent 를 그대로 돌리기 때문에, 한 턴이 물리면 **서버가
+        //   통째로 죽는다**(포트는 LISTEN 인데 아무 명령도 안 받는다).
+        //   120초는 넉넉한 상한일 뿐 튜닝 값이 아니다 — 정상 한 턴은 5~10초다.
+        .callTimeout(120, TimeUnit.SECONDS)
         .build()
 
     // 프롬프트

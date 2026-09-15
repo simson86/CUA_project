@@ -68,6 +68,9 @@ class a11service : AccessibilityService(), Executor {
         //  (accept 루프에서 runAgent 를 그대로 돌린다) 그때 서버가 통째로 죽고,
         //  포트는 리스닝인데 아무 명령도 안 받는 상태가 된다 — 앱 재시작 전엔 안 풀린다.
         //  실측된 정상값: 캡처 ~0.3초. 아래 값은 넉넉한 상한일 뿐 튜닝 대상이 아니다.
+        /** 클라이언트가 명령 한 줄을 다 보낼 때까지의 상한. 보내다 만 연결이 스레드를
+         *  영원히 잡지 않게 한다. 정상값은 밀리초 단위다. */
+        const val CLIENT_READ_TIMEOUT_MS = 15_000
         const val CAPTURE_TIMEOUT_S = 10L
         const val GESTURE_TIMEOUT_S = 10L
         const val UI_POST_TIMEOUT_S = 5L
@@ -122,6 +125,16 @@ class a11service : AccessibilityService(), Executor {
      * 되면 셋 다 같이 옮겨야 한다.
      */
     @Volatile private var attended = true
+
+    /**
+     * 지금 에이전트가 돌고 있나. 앱 UI·소켓 양쪽이 세운다.
+     *
+     * 연결마다 스레드를 띄우게 되면서 **소켓 RUN 이 동시에 둘 들어올 수 있다.** 그러면
+     * 두 에이전트가 같은 화면을 서로 조작한다 — 화면도 기록도 엉킨다. 앱 UI 와 소켓이
+     * 겹치는 것도 마찬가지라 깃발 하나를 둘이 공유한다.
+     * (앱 UI 는 실행 중 버튼을 잠그지만 그건 UI 한 겹일 뿐이다.)
+     */
+    @Volatile private var agentBusy = false
     // 카드가 떠 있는 동안 에이전트 스레드는 latch 앞에서 자고 있어 cancel 깃발을 확인할 코드가
     // 돌지 않는다. 중단 버튼이 그 대기까지 깨워야 '눌러도 반응 없음'이 안 생긴다.
     @Volatile private var pendingLatch: CountDownLatch? = null
@@ -163,6 +176,9 @@ class a11service : AccessibilityService(), Executor {
                             log: (String) -> Unit): String {
         // 지난 실행에서 중단 버튼이 눌렸으면 cancelled 가 true 로 남아 있다.
         // 초기화하지 않으면 새 요청이 첫 턴에서 곧바로 중단된다.
+        // ★ true 로 새면 이후 **모든** 실행이 영구히 막힌다. 반드시 finally 로 푼다.
+        if (agentBusy) return "이미 실행 중입니다. 끝난 뒤 다시 시도하세요."
+        agentBusy = true
         cancelled = false
         skipBlackPkgs.clear()      // "그냥 계속" 판단은 이번 실행에만 유효하다
         attended = true            // 앱에서 눌렀으니 사람이 보고 있다
@@ -181,6 +197,8 @@ class a11service : AccessibilityService(), Executor {
                 trace = runTrace)
         } catch (e: Exception) {
             "오류: ${e.message}"     // screenshot/네트워크 예외도 알림에 잡히게
+        } finally {
+            agentBusy = false
         }
         postOverlay(r)
         notifyDone(task, r)
@@ -902,14 +920,40 @@ class a11service : AccessibilityService(), Executor {
         startServer()
     }
 
+    /**
+     * 8080 소켓 서버. **연결마다 스레드를 띄운다.**
+     *
+     * 왜 — 예전엔 accept 루프에서 명령 처리까지 직접 했다. 그러면 처리 중 **한 군데라도
+     * 안 끝나면 서버가 통째로 죽는다**: 포트는 LISTEN 인데 아무 명령도 안 받고, 앱을
+     * 재시작하기 전엔 안 풀린다. 실제로 세 번 겪었고 매번 물린 자리가 달랐다 —
+     *   ① 인계 카드가 없는 사람을 3분 기다림   → attended 깃발로 해결
+     *   ② cuCall 이 5분 넘게 안 돌아옴          → callTimeout 으로 해결
+     *   ③ 응답을 쓰다 멈춤(자바 소켓엔 쓰기 타임아웃이 없다) → 여기, 구조로 해결
+     * 하나씩 막는 걸로는 안 끝난다는 게 ③에서 분명해졌다. 이제 물려도 **그 스레드만**
+     * 죽고 서버는 계속 명령을 받는다.
+     *
+     * 남은 구멍: 쓰기가 멈춘 스레드는 회수되지 않는다(자바 소켓에 쓰기 상한이 없어
+     * NIO 없이는 못 막는다). 스레드 하나가 새는 건 서버가 죽는 것보다 훨씬 낫다.
+     */
     private fun startServer() {
         thread(isDaemon = true) {
             val server = ServerSocket(8080)
             Log.d("A11y", "server listening on 8080")
             while (true) {
-                val client = server.accept()                       // PC 접속 대기
+                val client = try { server.accept() } catch (e: Exception) {
+                    Log.e("A11y", "accept 실패: ${e.message}"); continue
+                }
+                thread(isDaemon = true) { handleClient(client) }
+            }
+        }
+    }
+
+    private fun handleClient(client: Socket) {
+        run {
                 Log.d("A11y", "client connected: ${client.inetAddress}")
                 try {
+                    // 읽기 상한. 명령을 보내다 만 클라이언트가 이 스레드를 영원히 잡지 않게.
+                    client.soTimeout = CLIENT_READ_TIMEOUT_MS
                     // 클라이언트가 보낸 명령 한 줄을 읽는다. readLine()은 '\n'까지 읽고 개행은 뗀다.
 
 
@@ -938,12 +982,36 @@ class a11service : AccessibilityService(), Executor {
                         "HOME"      -> { performGlobalAction(GLOBAL_ACTION_HOME); ackOK(client) }
                         "RECENTS"   -> { performGlobalAction(GLOBAL_ACTION_RECENTS); ackOK(client) }
                         "OPEN"      -> { openApp(p[1]); ackOK(client) }
+
+                        // ── 측정 하네스용 (Unit 4) ──────────────────────────
+                        //  기억을 PC 에서 세웠다 비웠다 할 수 있어야 A/B 를 **번갈아** 돌린다.
+                        //  손으로 목록 UI 를 만져야 하면 배치를 A 5회 / B 5회로 쪼갤 수밖에 없고,
+                        //  그러면 시간대·앱 학습 효과가 조건에 엮인다.
+                        //  ★ 전부 bench{} 로 감싼다. 예외를 그냥 튀우면 바깥 catch 가 로그만
+                        //    남기고 연결을 닫아, PC 는 **빈 응답**만 본다. 그러면 러너가
+                        //    "기억이 거절됐다"와 "연결이 죽었다"를 구분할 수 없고, 조건 B 가
+                        //    조용히 비어 있는 채로 측정이 돌아간다.
+                        "MEMCLEAR"  -> bench(client) { "OK ${gateway.deleteAll()}" }
+                        "MEMADD"    -> bench(client) {
+                            // JSON 에 공백이 있으므로 split 이 아니라 첫 공백 뒤 전체를 쓴다.
+                            val body = line.trim().substringAfter(" ")
+                            "OK ${gateway.addFromJson(org.json.JSONObject(body))}"
+                        }
+                        "MEMCOUNT"  -> bench(client) { "OK ${gateway.count()}" }
+                        "DUMP"      -> bench(client) { dumpLastRun() }
                         "RUN" -> {
                             val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
                             // 소켓 경로도 기록한다 — tools/bench_*.py 가 이쪽을 쓰므로
                             // 여기서 빠지면 정작 측정할 실행이 로그에 안 남는다.
                             // ★ 실행 단위 상태를 runTask 와 똑같이 초기화한다. 안 하면 지난 실행이
                             //   남긴 cancelled=true 를 물려받아 첫 턴에서 곧바로 중단된다.
+                            // ★ 연결마다 스레드라 RUN 이 동시에 둘 들어올 수 있다.
+                            //   두 에이전트가 같은 화면을 조작하면 화면도 기록도 엉킨다.
+                            if (agentBusy) {
+                                ackLine(client, "ERR 이미 실행 중입니다")
+                                return@run
+                            }
+                            agentBusy = true
                             cancelled = false
                             skipBlackPkgs.clear()
                             attended = false            // 소켓 = 지켜보는 사람이 없는 실행
@@ -961,6 +1029,7 @@ class a11service : AccessibilityService(), Executor {
                                 "오류: ${e.message}"
                             } finally {
                                 attended = true         // 다음 앱 UI 실행이 무인으로 오해받지 않게
+                                agentBusy = false
                             }
                             client.getOutputStream().apply {
                                 write((result + "\n").toByteArray()); flush()
@@ -971,9 +1040,8 @@ class a11service : AccessibilityService(), Executor {
                 } catch (e: Exception) {
                     Log.e("A11y", "client error: ${e.message}")
                 } finally {
-                    client.close()                                 // 이번 요청 끝 → 연결 정리
+                    try { client.close() } catch (_: Exception) {}  // 이번 요청 끝 → 연결 정리
                 }
-            }
         }
     }
     private fun pxX(norm: Int, w:Int) = (norm / 1000.0 * w).toInt()
@@ -1026,7 +1094,71 @@ class a11service : AccessibilityService(), Executor {
         val out = client.getOutputStream()
         out.write("OK\n".toByteArray());out.flush()
     }
+
+    /**
+     * 측정 명령의 응답. 성공이면 [body] 가 돌려준 줄을, 실패면 `ERR <사유>` 를 보낸다.
+     *
+     * **반드시 한 줄이 나가야 한다.** 러너는 응답으로만 상태를 아는데, 빈 응답은
+     * "거절됐다"와 "연결이 죽었다"를 구분해 주지 못한다. 특히 MEMADD 가 조용히 실패하면
+     * 조건 B 에 기억이 없는 채로 측정이 돌아가 **"기억은 효과가 없다"는 틀린 결론**이 난다.
+     */
+    private inline fun bench(client: Socket, body: () -> String) {
+        val reply = try { body() } catch (e: Exception) {
+            Log.w("A11y", "bench 명령 실패", e)
+            "ERR " + (e.message ?: e.javaClass.simpleName).lines().joinToString(" ")
+        }
+        ackLine(client, reply)
+    }
+
+    /** 한 줄 응답. toByteArray() 는 UTF-8 이라 한글이 그대로 간다. */
+    private fun ackLine(client: Socket, s: String) {
+        val out = client.getOutputStream()
+        out.write((s + "\n").toByteArray()); out.flush()
+    }
+
+    /**
+     * 마지막 run 1건 + 그 턴들을 JSON 한 줄로. 측정 스크립트가 결과를 프로그램으로 읽는다.
+     *
+     * 왜 turnsUsed 만으로 안 되나 — 탐색 라운드에서 **어디서 턴을 낭비했는지**를 봐야
+     * 기억 문장을 쓸 수 있다. episode 를 같이 실어야 그걸 눈이 아니라 스크립트로 읽는다.
+     *
+     * memoryCount 를 함께 싣는 이유: 조건 A 가 **정말 0건이었는지** 실행마다 확인해야 한다.
+     * 확인하지 않으면 A 와 B 가 같은 조건이었던 실행이 섞여도 알 수 없다.
+     */
+    private fun dumpLastRun(): String = try {
+        val r = memoryDao.recentRuns(1).firstOrNull()
+            ?: return org.json.JSONObject().put("error", "run 행이 없다").toString()
+        val eps = org.json.JSONArray()
+        for (e in memoryDao.episodesOf(r.id)) {
+            eps.put(org.json.JSONObject()
+                .put("turn", e.turn).put("pkg", e.pkg ?: org.json.JSONObject.NULL)
+                .put("action", e.action ?: org.json.JSONObject.NULL)
+                .put("intent", e.intent ?: org.json.JSONObject.NULL)
+                .put("result", e.result ?: org.json.JSONObject.NULL)
+                .put("note", e.note ?: org.json.JSONObject.NULL))
+        }
+        org.json.JSONObject()
+            .put("runId", r.id).put("goal", r.goal)
+            .put("model", r.model).put("thinking", r.thinking).put("maxTurns", r.maxTurns)
+            .put("outcome", r.outcome ?: org.json.JSONObject.NULL)
+            .put("turnsUsed", r.turnsUsed ?: org.json.JSONObject.NULL)
+            .put("startedAt", r.startedAt).put("endedAt", r.endedAt ?: org.json.JSONObject.NULL)
+            .put("memoryReadFailed", r.memoryReadFailed ?: org.json.JSONObject.NULL)
+            .put("memoryCount", memoryDao.memoryCount())
+            .put("episodes", eps)
+            .toString()
+    } catch (e: Exception) {
+        // 여기서 던지면 바깥 catch 가 연결을 닫아 PC 는 '빈 응답'만 본다.
+        org.json.JSONObject().put("error", e.message ?: e.javaClass.simpleName).toString()
+    }
     override fun confirm(explanation: String): Boolean {
+        // 무인 실행에는 승인할 사람이 없다. 60초(아래 latch)를 기다려 봐야 결국 미승인이므로
+        // 지금 거부한다. **자동 승인은 절대 안 된다** — 지켜보는 사람이 없을수록 더 그렇다.
+        // 인계·자격증명 카드와 같은 원칙이고, 소켓 수정(2026-09-13) 때 여기만 빠졌었다.
+        if (!attended) {
+            Log.w("A11y", "무인 실행 — 확인 카드를 안 띄우고 거부한다: $explanation")
+            return false
+        }
         if (!Settings.canDrawOverlays(this)) return false   // 권한 없으면 안전하게 거부
         val latch = CountDownLatch(1)
         var approved = false
