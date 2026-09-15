@@ -7,6 +7,13 @@
 **상태: 코드 미적용.** 2026-09-02 작성. `minSdk = 30` 확인 — 접근성 버튼(API 26+)에
 버전 가드가 필요 없다.
 
+> **2026-09-15 갱신 — 새 main(PR #13~#15: 모델 3.7·3.8, 기억 시스템, 무인 실행) 기준으로 고쳤다.**
+> 달라진 곳: §3-a 테마 부모 · §4 `attended` · §5 `RunConfig`(**옛 코드는 컴파일 안 됨**) ·
+> §5 소켓 권고(**철회 — 따르면 PR #15 가 고친 버그가 되살아난다**) · §6 가드.
+> 같은 날 확인: Google Assistant 는 2026-09-04 부터 종료 중이고, 후속인 Gemini 는 제3자 앱에
+> 작업을 넘길 공개 경로가 없다(AppFunctions 는 비공개 프리뷰). 그래서 트리거는 이 문서대로
+> **우리가 직접 만든다.**
+
 ---
 
 ## §0 무엇을 만드는가
@@ -86,7 +93,8 @@ override fun onAccessibilityButtonClicked() {
 ```
 
 `ui` 는 이미 서비스에 있는 메인 핸들러다(오버레이가 쓴다). Toast 는 메인 스레드에서만
-띄울 수 있다.
+띄울 수 있다. **`import android.widget.Toast` 를 추가할 것** — 2026-09-15 기준 `a11service.kt` 에는
+`Intent` 만 있고 `Toast` import 가 없다.
 
 ### (c) 폰에서 해야 하는 일 ★ 코드로 못 한다
 
@@ -116,7 +124,9 @@ override fun onAccessibilityButtonClicked() {
 ```xml
 <!-- 투명 액티비티. windowIsTranslucent 없이 배경만 투명하게 하면 뒤 앱이 안 보인다
      (액티비티 창은 기본이 불투명이라, 그 아래 그리기를 시스템이 아예 멈춘다). -->
-<style name="Theme.VoiceTrigger" parent="Theme.AppCompat.NoActionBar">
+<!-- 부모는 앱 테마와 같은 Material3 계열로 — AppCompat 로 두면 다크 모드·?attr/colorSurface 색이
+     MainActivity 와 달라진다. (AppCompatActivity 는 Material3 테마에서도 그대로 동작한다.) -->
+<style name="Theme.VoiceTrigger" parent="Theme.Material3.DayNight.NoActionBar">
     <item name="android:windowIsTranslucent">true</item>
     <item name="android:windowBackground">@android:color/transparent</item>
     <item name="android:windowContentOverlay">@null</item>
@@ -324,6 +334,8 @@ override fun onAccessibilityButtonClicked() {
 fun launchFromTrigger(task: String) {
     ui.postDelayed({
         thread { runTaskWithSavedConfig(task) }   // 네트워크·대기가 있으므로 메인 스레드 금지
+        // ★ runTask 를 거치므로 attended = true 로 돈다 — 사람이 버튼을 누른 실행이니 맞다.
+        //   소켓 RUN 처럼 runAgent 를 직접 부르면 무인 취급돼, 인계·자격증명 카드 없이 즉시 실패한다.
     }, TRIGGER_SETTLE_MS)
 }
 ```
@@ -358,12 +370,14 @@ data class RunConfig(val maxTurns: Int, val model: String, val thinking: String)
     companion object {
         fun load(ctx: Context): RunConfig {
             val p = ctx.getSharedPreferences("cua", Context.MODE_PRIVATE)
+            // ★ 모델·사고수준은 **저장된 문자열을 그대로** 넘긴다. 여기서 인덱스로 거르지 말 것.
+            //   조합 검증(3.7·3.8 + minimal → 400)은 runTask 안의 cu.configure() 한 곳에만 있다.
+            //   여기서 또 거르면 규칙이 두 벌이 되고, CuClient.THINKING[...] 처럼 전체 목록 인덱스로
+            //   읽으면 모델별 목록(thinkingFor)과 어긋난다 — MainActivity 도 같은 이유로 인덱스를 안 쓴다.
             return RunConfig(
                 maxTurns = p.getInt("max_turns", 20).coerceIn(1, 40),
-                model    = CuClient.MODELS[CuClient.modelIndex(
-                    p.getString("model", null) ?: BuildConfig.GEMINI_MODEL)],
-                thinking = CuClient.THINKING[CuClient.thinkingIndex(
-                    p.getString("thinking", null) ?: BuildConfig.GEMINI_THINKING)],
+                model    = p.getString("model", null) ?: BuildConfig.GEMINI_MODEL,
+                thinking = p.getString("thinking", null) ?: BuildConfig.GEMINI_THINKING,
             )
         }
     }
@@ -388,9 +402,13 @@ fun runTaskWithSavedConfig(task: String, log: (String) -> Unit = {}): String {
 (사용자가 방금 고른 값이 곧 저장값이라 결과가 같다). 여기서 굳이 `RunConfig` 를
 읽게 바꾸면 "화면에 보이는 값과 도는 값이 다를 수 있는" 경로가 생긴다.
 
-**소켓 `RUN` 도 같이 고칠 수 있다** — 지금은 `runAgent` 를 직접 불러 오버레이·알림·
-`[설정]` 로그가 전부 없다. `runTaskWithSavedConfig(task)` 로 바꾸면 세 경로가 같아진다.
-다만 이건 트리거와 별개 변경이니 **커밋을 나눌 것.**
+**소켓 `RUN` 은 `runTaskWithSavedConfig` 로 합치지 말 것 — 권고 철회(2026-09-15).**
+처음엔 "세 경로를 같게 하자"고 적었지만 이제는 **하면 안 된다.** `runTask` 는 시작할 때
+`attended = true`(사람이 보고 있다)로 둔다. 소켓은 정의상 무인이라 팀원이 PR #15 에서 일부러
+`runAgent` 를 직접 부르고 `attended = false` 로 돌린다. 이걸 `runTask` 로 합치면 **없는 사람을
+인계 카드 앞에서 3분씩 기다리던 버그(실측 203초 중 187초)가 되살아난다.**
+목적은 경로를 하나로 모으는 게 아니라, **각 경로가 '사람이 있나'를 정확히 말하게 하는 것**이다.
+트리거는 사람이 누른 것이므로 `runTask` 경로가 맞다(§4).
 
 ---
 
@@ -402,7 +420,10 @@ fun runTaskWithSavedConfig(task: String, log: (String) -> Unit = {}): String {
 1. **3초 카운트다운 + 취소는 반드시 유지한다.** 모델의 `require_confirmation` 은
    비결정적이라 방어선으로 못 믿는다(`CLAUDE.md`).
 2. **중복 실행 가드** — 서비스에 상태를 둔다. 지금은 `MainActivity` 가 버튼을 비활성화해
-   막고 있을 뿐이라, 액티비티를 안 거치는 경로엔 아무 가드가 없다.
+   막고 있을 뿐이라, 액티비티를 안 거치는 경로엔 아무 가드가 없다(2026-09-15 main 에도
+   `isRunning` 은 없다). **소켓 `RUN` 도 이 가드를 안 거친다** — 트리거로 도는 중에 PC 가
+   `RUN` 을 쏘면 둘이 같은 화면을 만진다. 게다가 `attended`·`cancelled` 가 실행 단위가 아니라
+   서비스 필드라 서로를 덮는다(팀원 주석: "병렬 실행을 허용하게 되면 셋 다 같이 옮겨야 한다").
 
    ```kotlin
    @Volatile var isRunning = false
