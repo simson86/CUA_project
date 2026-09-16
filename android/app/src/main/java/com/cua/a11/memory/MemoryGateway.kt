@@ -175,6 +175,54 @@ class MemoryGateway(private val dao: MemoryDao) {
         }
     }
 
+    // ── reconciliation (Unit 5c) ────────────────────────────────────────
+    /**
+     * 이 실행과 **대조할 기억들**. 리플렉터 프롬프트에 id 와 함께 실린다.
+     *
+     * 고르는 기준은 *"이 실행에 붙을 수 있었던 것"* 이다 — `APP_FACT` 는 이 실행에서 실제로
+     * 간 앱의 것, `PITFALL` 은 목표 문장에 걸리는 것. 주입 경로와 같은 조건을 쓴다.
+     *
+     * ⚠️ **`PENDING` 을 반드시 포함한다.** 재관측이 `PENDING` 의 **유일한 승격 경로**라
+     * 모델이 그걸 봐야 *"같은 걸 또 봤다"(NOOP)* 고 말할 수 있다. 빼면 검역이 영영 안 풀린다.
+     * 반대로 `RETIRED` 는 DAO 에서 이미 빠져 있다.
+     */
+    fun reconcileSet(pkgs: Set<String>, goal: String): List<MemoryEntity> {
+        val g = goal.lowercase()
+        return dao.reconcilable().filter { m ->
+            when (m.kind) {
+                "PITFALL" -> m.keywords?.split(',')
+                    ?.any { k -> k.trim().takeIf { it.isNotEmpty() }?.let { g.contains(it.lowercase()) } == true } == true
+                else -> pkgs.any { appliesTo(m, it) }
+            }
+        }
+    }
+
+    /** `NOOP` — 재관측됐다. 점수를 올리고 `>= 2` 면 검역을 푼다. */
+    fun noop(id: Long) {
+        val ids = listOf(id)
+        dao.raiseScore(ids)
+        dao.activateProven(ids)
+    }
+
+    /** `DELETE` — 즉시 은퇴. 돌려주는 값이 false 면 `pinned` 라 건너뛴 것이다. */
+    fun retireByVerdict(id: Long): Boolean =
+        dao.retireByVerdict(id, System.currentTimeMillis()) > 0
+
+    /**
+     * `UPDATE` — 새 문장을 넣고 기존을 그쪽으로 넘긴다.
+     *
+     * **순서가 중요하다**: 새 행을 먼저 넣어야 `supersededBy` 에 넣을 id 가 생긴다. 그리고
+     * 기존이 `pinned` 면 **아무것도 하지 않는다** — 새 행만 넣으면 사람이 쓴 문장과 거의 같은
+     * 기억이 둘이 되어 예산만 잡아먹는다.
+     */
+    fun supersede(oldId: Long, new: MemoryEntity): Long? {
+        val old = dao.allMemories().firstOrNull { it.id == oldId } ?: return null
+        if (old.pinned) return null
+        val newId = save(new)
+        dao.supersede(oldId, newId, System.currentTimeMillis())
+        return newId
+    }
+
     /** 목록 UI·측정용. `memoryId → (실행 수, 주입 횟수, 성공 수)`. */
     fun recallStats(): Map<Long, RecallStat> = dao.recallStats().associateBy { it.memoryId }
 

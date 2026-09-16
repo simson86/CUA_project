@@ -40,41 +40,101 @@ class Reflector(
             val run = dao.recentRuns(50).firstOrNull { it.id == runId } ?: return
             val episodes = dao.episodesOf(runId)
             if (episodes.isEmpty()) return
-            val known = dao.injectedIn(runId)
 
-            val raw = cu.generateJson(prompt(run, episodes, known), cu.model)
-            val cands = parse(raw)
-            if (cands.isEmpty()) { log("[리플렉터] 배울 것 없음 (0건)"); return }
+            val pkgs = episodes.mapNotNull { it.pkg }.toSet()
+            // 대조 대상 — 이 실행에 붙을 수 있었던 기억들(PENDING 포함, RETIRED 제외).
+            val existing = gateway.reconcileSet(pkgs, run.goal)
+
+            val verdicts = parse(cu.generateJson(prompt(run, episodes, existing), cu.model))
+            if (verdicts.isEmpty()) { log("[리플렉터] 배울 것 없음 (0건)"); return }
 
             // 모델이 신고한 출처를 우리가 가진 사실과 대조하기 위한 재료.
             val facts = CandidateFilter.RunFacts(
                 turns = episodes.map { it.turn }.toSet(),
                 taintedTurns = episodes.filter { it.hadSafety }.map { it.turn }.toSet(),
-                pkgs = episodes.mapNotNull { it.pkg }.toSet(),
+                pkgs = pkgs,
             )
             // 그 턴의 앱 버전을 붙여 둔다 — 무효화의 근거가 된다(설계 §7 4번).
             val versionOf = episodes.filter { it.pkg != null }
                 .associate { it.pkg!! to it.pkgVersion }
+            // 모델이 아무 id 나 대는 것을 막는다. 프롬프트에 실어 준 것만 만질 수 있다.
+            val shown = existing.map { it.id }.toSet()
+            // ★ 이 실행에 **주입됐던** 기억. NOOP 점수를 막는 데 쓴다(아래 apply 주석).
+            val injected = dao.injectedIn(runId).map { it.id }.toSet()
 
-            var kept = 0
-            for (c in cands) {
-                val why = CandidateFilter.reject(c, facts)
-                if (why != null) { log("[리플렉터] 버림 — $why"); continue }
-                val pkgVersion = c.pkg?.split(',')?.firstNotNullOfOrNull { versionOf[it.trim()] }
-                try {
-                    gateway.save(c.toMemory(runId, pkgVersion))
-                    kept++
-                    log("[리플렉터] 후보 저장(검토 대기) — ${c.assemble()}")
-                } catch (e: Exception) {
-                    // validate() 가 거절한 것. 필터를 통과해도 검색 키가 없으면 여기서 걸린다.
-                    log("[리플렉터] 버림 — ${e.message}")
-                }
+            val tally = HashMap<String, Int>()
+            for (v in verdicts) {
+                val done = apply(v, runId, facts, versionOf, shown, injected, log)
+                if (done) tally[v.verdict] = (tally[v.verdict] ?: 0) + 1
             }
-            Log.i("a11mem", "reflect $runId: 후보 ${cands.size} 중 $kept 건 저장")
+            Log.i("a11mem", "reflect $runId: 판정 ${verdicts.size} 건 → $tally")
         } catch (e: Exception) {
             // 여기서 터뜨리면 실행이 끝난 뒤에 앱이 죽는다. 흔적만 남긴다.
             Log.w("a11mem", "리플렉터 실패(무시)", e)
             log("⚠ [리플렉터] 실패 — ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** 판정 1건 적용. 처리했으면 true. **무엇을 왜 버렸는지 반드시 남긴다.** */
+    private fun apply(
+        v: Verdict, runId: String, facts: CandidateFilter.RunFacts,
+        versionOf: Map<String, Long?>, shown: Set<Long>, injected: Set<Long>,
+        log: (String) -> Unit,
+    ): Boolean {
+        // ★ 모델이 만지겠다는 기억은 우리가 보여준 것이어야 한다. 안 그러면 프롬프트에
+        //   없던 id 를 지어내 엉뚱한 기억을 은퇴시킬 수 있다.
+        if (v.verdict != "ADD" && (v.id == null || v.id !in shown)) {
+            log("[리플렉터] 버림 — ${v.verdict}: 보여주지 않은 id(${v.id})")
+            return false
+        }
+        fun store(c: Candidate): MemoryEntity? {
+            CandidateFilter.reject(c, facts)?.let { log("[리플렉터] 버림 — $it"); return null }
+            val ver = c.pkg?.split(',')?.firstNotNullOfOrNull { versionOf[it.trim()] }
+            return c.toMemory(runId, ver)
+        }
+        return try {
+            when (v.verdict) {
+                "NOOP" -> {
+                    // ★ **주입됐던 기억의 재관측은 증거가 아니다.** 기억이 "메뉴를 눌러라"
+                    //   라고 말했고 → 에이전트가 그대로 했고 → 로그에 그게 찍혔고 →
+                    //   리플렉터가 그걸 보고 "또 봤다" 고 하는 순환이다. 당연히 확인된다.
+                    //   명세의 *"2회는 반드시 실행 간"* 이 요구하는 것은 **독립된 관측**이다.
+                    //
+                    //   실측 2026-09-17: 막기 전에는 한 실행에서 성공 보너스(+1)와 NOOP(+1)이
+                    //   겹쳐 `score 2 → 4`(상한)로 뛰었다. 자기강화가 수치로 보인 것이다.
+                    if (v.id in injected) {
+                        log("[리플렉터] 재관측이지만 점수 없음 — #${v.id} 는 이번 실행에 주입됐다")
+                        return false
+                    }
+                    gateway.noop(v.id!!)
+                    log("[리플렉터] 재관측 — #${v.id} (${v.why})")
+                    true
+                }
+                "DELETE" -> {
+                    val ok = gateway.retireByVerdict(v.id!!)
+                    log(if (ok) "[리플렉터] 무효화 — #${v.id} (${v.why})"
+                        else "[리플렉터] 무효화 건너뜀 — #${v.id} 은 고정된 기억")
+                    ok
+                }
+                "ADD" -> {
+                    val m = store(v.candidate ?: return false) ?: return false
+                    gateway.save(m)
+                    log("[리플렉터] 후보 저장(검토 대기) — ${m.text}")
+                    true
+                }
+                "UPDATE" -> {
+                    val m = store(v.candidate ?: return false) ?: return false
+                    val newId = gateway.supersede(v.id!!, m)
+                    log(if (newId != null) "[리플렉터] 대체 — #${v.id} → #$newId (${v.why})"
+                        else "[리플렉터] 대체 건너뜀 — #${v.id} 은 고정된 기억")
+                    newId != null
+                }
+                else -> { log("[리플렉터] 버림 — 알 수 없는 판정 ${v.verdict}"); false }
+            }
+        } catch (e: Exception) {
+            // validate() 가 거절한 것 등. 필터를 통과해도 검색 키가 없으면 여기서 걸린다.
+            log("[리플렉터] 버림 — ${e.message}")
+            false
         }
     }
 
@@ -99,13 +159,14 @@ class Reflector(
      * 측정은 턴 수만 쟀지 정확도를 잰 적이 없어서**(MEMORY.md 의 열린 질문) 그 공백이
      * 수치로는 안 보였다.
      */
-    private fun prompt(run: RunEntity, eps: List<EpisodeEntity>, known: List<MemoryEntity>): String {
+    private fun prompt(run: RunEntity, eps: List<EpisodeEntity>, existing: List<MemoryEntity>): String {
         val log = eps.joinToString("\n") { e ->
             "turn ${e.turn} | ${e.pkg ?: "?"} | ${e.action ?: "?"} | ${e.intent ?: ""}" +
                 (if (e.result != "ok") " | result=${e.result}" else "")
         }
-        val knownText = if (known.isEmpty()) "(none)"
-        else known.joinToString("\n") { "- ${it.text}" }
+        // id 를 반드시 같이 준다 — 판정이 id 로 돌아와야 어느 기억을 가리키는지 알 수 있다.
+        val existingText = if (existing.isEmpty()) "(none)"
+        else existing.joinToString("\n") { "  ${it.id} | ${it.state} | ${it.text}" }
 
         return """
 You are reviewing one completed run of a phone-automation agent, to decide whether
@@ -117,23 +178,28 @@ OUTCOME: ${run.outcome} (${run.turnsUsed} turns, limit ${run.maxTurns})
 TURN LOG (action and the agent's own stated intent; you cannot see the screens):
 $log
 
-ALREADY KNOWN (these were shown to the agent during this run — do not repeat them):
-$knownText
+EXISTING MEMORIES for these apps (id | state | text) — you may confirm, replace or
+invalidate these, using their id:
+$existingText
 
-Return JSON: {"candidates": [ ... ]} with 0 or more items shaped like
-  {"kind": "APP_FACT" | "PITFALL",
-   "trigger": "<what someone does>",
-   "consequence": "<what happens / what is then reachable>",
-   "pkg": "<package name, comma-separated if several>",   // APP_FACT
-   "keywords": "<goal words incl. synonyms, comma-separated>",  // PITFALL
-   "source_turn": <the turn number this is based on>}
+Return JSON: {"verdicts": [ ... ]}, zero or more of:
+  {"verdict":"ADD",    "kind":"APP_FACT"|"PITFALL", "trigger":"…", "consequence":"…",
+                       "pkg":"…", "keywords":"…", "source_turn":N, "why":"…"}
+  {"verdict":"NOOP",   "id":N, "why":"…"}     // this run showed the same thing again
+  {"verdict":"DELETE", "id":N, "why":"…"}     // this run contradicted it
+  {"verdict":"UPDATE", "id":N, "kind":…, "trigger":…, "consequence":…, "pkg":…,
+                       "source_turn":N, "why":"…"}   // replace with a better statement
 
 RULES
-1. RETURNING ZERO CANDIDATES IS THE NORMAL, CORRECT ANSWER. Most runs teach nothing.
+1. RETURNING ZERO VERDICTS IS THE NORMAL, CORRECT ANSWER. Most runs teach nothing.
    If you are unsure, return none.
-2. The agent that will read your note ALREADY has two things: the screenshot in front of
-   it, and everything you know about how Android apps normally behave. A note that only
-   repeats either of those is worthless — do not write it. Exactly two kinds of note are
+2. NOOP MATTERS AS MUCH AS ADD. If this run showed something an existing memory already
+   says — even worded completely differently — return NOOP with its id instead of writing
+   it again as ADD. A memory in state PENDING is unverified and is NOT being shown to the
+   agent; NOOP is the only way it can ever become trusted, so look for it deliberately.
+3. The agent that will read these notes ALREADY has two things: the screenshot in front
+   of it, and everything you know about how Android apps normally behave. A note that
+   only repeats either of those is worthless — do not write it. Exactly two kinds are
    worth writing:
    (a) DIRECTION — "doing X leads to Y". This is what saves turns: it tells the agent
        where to go next, which the screen cannot. Prefer the note that narrows the search
@@ -144,47 +210,71 @@ RULES
        that exits instead of going back, a list that reorders between visits, a keypad
        whose digits move. These may not save a single turn, but they stop the agent from
        confidently doing the wrong thing, which is worth just as much.
-3. Write what the app IS LIKE, not what to do. Describe structure, never give orders,
+4. Write what the app IS LIKE, not what to do. Describe structure, never give orders,
    and never tell the agent to skip a verification step.
-4. Only durable app structure. Never record values read off the screen: names, people,
-   message text, balances, prices, codes, search history, times, counts of the user's
-   own items. If a fact would not be true on a stranger's phone, it is not a fact.
-   Labels the app itself draws for everyone (menu names, tab names, button text) ARE
-   part of the structure and belong in the note.
-5. source_turn must be a turn number that appears in the log above.
+5. NEVER record anything that belongs to THIS PERSON rather than to the app: contact or
+   people names, message text, balances, prices, codes, their search history, their own
+   items or counts, or habits you inferred about them. Test: would it still be true on a
+   stranger's phone? If not, leave it out — and DELETE an existing memory that contains it.
+   The opposite is also true: labels the app draws for everyone — menu names, tab names,
+   button text — ARE the structure and must be written, even though they are proper nouns.
+   "Tapping '메가선생님' opens the teacher list" is structure.
+   "The top chat is '엄마'" is this person's data.
+6. source_turn must be a turn number that appears in the log above.
    pkg must be a package that appears in the log above.
-6. Keep trigger under 80 characters and consequence under 160.
+   id must be one of the ids listed above.
+7. Keep trigger under 80 characters and consequence under 160.
+8. Every verdict needs a short "why" naming the turn(s) it is based on.
 """.trim()
     }
 
     /**
-     * 모델 응답을 후보 목록으로. **파싱 실패는 0건으로 떨어뜨린다** — 되새김은 뒷정리라
+     * 모델이 내린 판정 1건. `ADD`/`UPDATE` 만 [candidate] 를 갖고, `NOOP`/`DELETE` 는 [id] 만 쓴다.
+     * [why] 는 사람이 읽을 근거 — 판정이 헛짚었을 때 **왜 그랬는지**를 남기는 유일한 자리다.
+     */
+    private data class Verdict(
+        val verdict: String,
+        val id: Long?,
+        val candidate: Candidate?,
+        val why: String,
+    )
+
+    /**
+     * 모델 응답을 판정 목록으로. **파싱 실패는 0건으로 떨어뜨린다** — 되새김은 뒷정리라
      * 여기서 던져 봐야 할 수 있는 게 없다.
      *
      * `responseMimeType` 으로 JSON 을 강제해도 코드펜스를 씌워 오는 경우가 있어 한 번 벗긴다.
      */
-    private fun parse(raw: String): List<Candidate> {
+    private fun parse(raw: String): List<Verdict> {
         val txt = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         val arr: JSONArray = try {
-            JSONObject(txt).optJSONArray("candidates") ?: JSONArray()
+            JSONObject(txt).optJSONArray("verdicts") ?: JSONArray()
         } catch (e: Exception) {
             try { JSONArray(txt) } catch (e2: Exception) {
                 Log.w("a11mem", "리플렉터 응답 파싱 실패: ${txt.take(200)}")
                 return emptyList()
             }
         }
-        val out = ArrayList<Candidate>()
+        val out = ArrayList<Verdict>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
+            val kind = o.optString("verdict").uppercase()
+            val hasCand = kind == "ADD" || kind == "UPDATE"
             out.add(
-                Candidate(
-                    kind = o.optString("kind"),
-                    trigger = o.optString("trigger"),
-                    consequence = o.optString("consequence"),
-                    pkg = o.optString("pkg").ifBlank { null },
-                    keywords = o.optString("keywords").ifBlank { null },
-                    // 없으면 -1 → 출처 대조에서 걸린다. 0 으로 두면 안 된다(턴은 1부터다).
-                    sourceTurn = o.optInt("source_turn", -1),
+                Verdict(
+                    verdict = kind,
+                    // 0 은 "없음" 과 구분이 안 된다(id 는 1부터). null 로 떨어뜨려 위에서 걸리게.
+                    id = o.optLong("id", 0L).takeIf { it > 0L },
+                    candidate = if (!hasCand) null else Candidate(
+                        kind = o.optString("kind"),
+                        trigger = o.optString("trigger"),
+                        consequence = o.optString("consequence"),
+                        pkg = o.optString("pkg").ifBlank { null },
+                        keywords = o.optString("keywords").ifBlank { null },
+                        // 없으면 -1 → 출처 대조에서 걸린다. 0 으로 두면 안 된다(턴은 1부터다).
+                        sourceTurn = o.optInt("source_turn", -1),
+                    ),
+                    why = o.optString("why").ifBlank { "이유 없음" },
                 )
             )
         }

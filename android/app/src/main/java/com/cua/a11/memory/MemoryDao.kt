@@ -146,8 +146,18 @@ interface MemoryDao {
     @Query("UPDATE memory SET score = MIN(score + 1, 4) WHERE id IN (:ids)")
     fun raiseScore(ids: List<Long>): Int
 
-    /** 실패한 실행에 주입됐다 → `score - 1`. **`pinned` 는 면제**(사람이 손댄 것). */
-    @Query("UPDATE memory SET score = score - 1 WHERE id IN (:ids) AND pinned = 0")
+    /**
+     * 실패한 실행에 주입됐다 → `score - 1`.
+     *
+     * ★ **`pinned` 를 보지 않는다**(2026-09-16 변경). 원칙: **코드가 재는 것은 사람 것에도
+     * 적용하고, 모델이 판정하는 것만 면제한다.** `pinned` 의 원래 의도는 Unit 8 의 *시간 기반*
+     * 정리로부터 보호하는 것이지 *증거 기반* 강등까지 막는 게 아니었다.
+     *
+     * 그리고 막으면 **`HUMAN_SCORE = 2` 가 무의미해진다** — 목록 UI 가 새 기억에 `pinned` 를
+     * 기본 체크하므로 사람이 쓴 기억은 강등 자체가 안 걸렸다(그래서 `bench` 기억에만 유효했다).
+     * **사람도 틀린다** — 2차 측정에서 턴을 +27% 늘린 메타클럽 문장은 사람이 쓴 것이다.
+     */
+    @Query("UPDATE memory SET score = score - 1 WHERE id IN (:ids)")
     fun lowerScore(ids: List<Long>): Int
 
     /**
@@ -166,7 +176,7 @@ interface MemoryDao {
      * **무효화는 삭제가 아니다** — 사람이 목록에서 보고 되살릴 수 있어야 한다.
      */
     @Query("UPDATE memory SET state = 'RETIRED', invalidAt = :now " +
-           "WHERE id IN (:ids) AND state != 'RETIRED' AND score <= 0 AND pinned = 0")
+           "WHERE id IN (:ids) AND state != 'RETIRED' AND score <= 0")
     fun retireExhausted(ids: List<Long>, now: Long): Int
 
     /**
@@ -181,6 +191,34 @@ interface MemoryDao {
     @Query("SELECT m.* FROM memory m JOIN memory_recall r ON r.memoryId = m.id " +
            "WHERE r.runId = :runId ORDER BY m.id")
     fun injectedIn(runId: String): List<MemoryEntity>
+
+    // ── reconciliation (Unit 5c) ──────────────────────────
+    /**
+     * 대조 대상 후보. **`RETIRED` 는 뺀다** — 부활 경로를 만들면 불안정하고, 같은 사실이
+     * 재관측되면 새 행으로 처음부터 쌓이는 편이 낫다(증거를 다시 모은다).
+     *
+     * 어느 기억이 이 실행과 관련 있는지는 **코틀린에서** 고른다(`MemoryGateway.reconcileSet`) —
+     * `APP_FACT` 는 쉼표 패키지 목록, `PITFALL` 은 목표 키워드라 SQL 로는 지저분하다.
+     */
+    @Query("SELECT * FROM memory WHERE state != 'RETIRED' ORDER BY id")
+    fun reconcilable(): List<MemoryEntity>
+
+    /**
+     * `DELETE` 판정 — **즉시 `RETIRED`**. `pinned` 는 면제한다: 모델 판정으로 사람이 쓴
+     * 기억을 뒤집지 않는다(뒤집으려면 사람이 목록에서 한다).
+     *
+     * 되돌릴 수 없어 보이지만 **자가 치유된다** — `RETIRED` 는 대조 대상에서 빠지므로,
+     * 같은 사실이 재관측되면 모델은 그런 기억이 있는지도 모른 채 `ADD` 를 낸다. 잃는 것은
+     * 누적된 점수뿐이다.
+     */
+    @Query("UPDATE memory SET state = 'RETIRED', invalidAt = :now " +
+           "WHERE id = :id AND state != 'RETIRED' AND pinned = 0")
+    fun retireByVerdict(id: Long, now: Long): Int
+
+    /** `UPDATE` 판정 — 기존을 은퇴시키고 새 행을 가리킨다. `pinned` 면제는 위와 같다. */
+    @Query("UPDATE memory SET state = 'RETIRED', invalidAt = :now, supersededBy = :newId " +
+           "WHERE id = :id AND state != 'RETIRED' AND pinned = 0")
+    fun supersede(id: Long, newId: Long, now: Long): Int
 
     /**
      * 목록 UI·측정용 요약. `run` 을 조인해 성공 수까지 센다.
