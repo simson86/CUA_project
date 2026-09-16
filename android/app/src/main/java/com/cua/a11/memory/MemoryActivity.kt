@@ -236,8 +236,11 @@ class MemoryActivity : AppCompatActivity() {
                 val isPitfall = kind == "PITFALL"
                 // 안 쓰는 쪽 검색 키는 비워서 저장한다. 종류를 바꿔 저장하면 옛 키가 남아
                 // 목록에 유령 정보로 뜬다.
+                // 새로 만들 때만 HUMAN_SCORE 로 시작한다. existing 은 copy() 라
+                // 지금까지의 점수가 그대로 유지된다 — 편집이 이력을 지우면 안 된다.
                 val draft = (existing ?: MemoryEntity(
                     kind = kind, text = "", source = "user_ui",
+                    score = MemoryGateway.HUMAN_SCORE,
                     timeAdded = System.currentTimeMillis(),
                 )).copy(
                     kind = kind,

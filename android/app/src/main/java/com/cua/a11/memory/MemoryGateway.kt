@@ -21,6 +21,25 @@ class MemoryGateway(private val dao: MemoryDao) {
         /** 우리 앱 자신. 에이전트가 *조작하는* 앱이 아니라 *실행이 시작된 곳*이라 앱 지식이 될 수 없다. */
         const val OWN_PACKAGE = "com.cua.a11"
 
+        /**
+         * **사람이 써 넣은 기억의 시작 점수**(열린 결정 N5, 2026-09-16 확정).
+         *
+         * 기본값 1 로 두면 `fail`(최대 턴 도달) **한 번에 score 0 → RETIRED** 다.
+         * 측정에서 이게 조용한 오염이 된다 — 30회 배치 중 B 실행 하나가 20턴을 넘기면
+         * 그 순간 기억이 은퇴하고 **이후 모든 B 가 사실상 A 가 된다.**
+         *
+         * 게다가 `fail` 은 *"기억이 틀렸다"* 가 아니라 *"20턴 안에 못 끝냈다"* 이다 —
+         * 앱이 느렸을 수도, 과제가 길었을 수도 있다.
+         *
+         * 명세 §7 은 승격 쪽에서 *"한 번은 우연일 수 있다"* 며 2회를 요구한다. 강등도
+         * 대칭이어야 한다. 그리고 명세는 **사람의 판단을 '즉시 ACTIVE'** 로 인정하므로,
+         * 그 판단이 실패 한 번보다는 무거운 게 맞다.
+         *
+         * ⚠️ **리플렉터가 만든 기억에는 쓰지 말 것** — 그쪽은 아직 검증 안 된
+         * 후보라 기본값 1(그리고 `PENDING`)에서 시작해야 한다.
+         */
+        const val HUMAN_SCORE = 2
+
         // ── 목록 UI 가 쓰는 값 목록 (Unit 3) ───────────────────
         //  RECIPE 는 일부러 뺐다 — 읽는 쪽(Unit 9)이 아직 없어서, 넣을 수 있게 해두면
         //  사용자가 **아무도 안 읽는 행**을 만들게 된다. Unit 9 에서 함께 연다.
@@ -181,7 +200,14 @@ class MemoryGateway(private val dao: MemoryDao) {
             scope = json.optString("scope").ifBlank { "pkg" },
             state = json.optString("state").ifBlank { "ACTIVE" },
             sensitivity = json.optString("sensitivity").ifBlank { "normal" },
+            // 사람이 넣은 기억은 목록 UI 에서 pinned 가 기본 체크다. 측정 하네스가 그
+            // 조건을 재현하려면 여기서도 지정할 수 있어야 한다(기본은 false — 자동 강등
+            // 경로를 타는 쪽이 bench 의 기본값이어야 측정이 실제 동작을 본다).
+            pinned = json.optBoolean("pinned", false),
             source = "bench",
+            // bench 는 사람이 쓴 문장을 대신 넣는 경로다 — 측정의 처치(處置)이므로
+            // 사람이 넣은 것과 같은 무게로 시작해야 한다(위 HUMAN_SCORE 주석).
+            score = HUMAN_SCORE,
             timeAdded = System.currentTimeMillis(),
         )
     )
