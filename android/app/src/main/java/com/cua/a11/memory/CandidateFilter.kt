@@ -3,9 +3,14 @@ package com.cua.a11.memory
 /**
  * 리플렉터가 뽑은 후보 1건. **문장이 아니라 칸이다**(설계 §2).
  *
- * `trigger` → `consequence` 두 칸뿐인 것이 이 설계에서 가장 강한 방어다(§3 집행 A층).
- * 잔액·이름·인증번호를 넣을 **자리 자체가 없다.** 문장을 검사해서 걸러내는 것보다
- * 새어나갈 칸을 없애는 쪽이 훨씬 강하다 — 검사는 놓칠 수 있지만 없는 칸은 못 채운다.
+ * `trigger` → `consequence` 두 칸뿐인 것이 §3 집행의 A층이다.
+ *
+ * ⚠️ **명세의 "넣을 자리 자체가 없다"는 과장이다.** 칸을 채우는 것은 모델이고, 코드는
+ * *"trigger 는 문자열"* 까지만 강제할 수 있지 *"trigger 에 동작이 들어 있다"* 는 강제하지
+ * 못한다. 모델은 얼마든지 `consequence` 에 `"잔액은 1,234,567원이다"` 를 넣을 수 있다.
+ * A층이 실제로 하는 일은 **자리를 없애는 게 아니라 덜 주는 것**이다 — 자유 서술 칸이
+ * 없으니 모든 것을 동작→결과로 말하게 되고, 그만큼 화면 내용보다 앱 동작 쪽으로 기운다.
+ * 유용하지만 **보장은 아니다.** 보장은 아래 결정론적 검사(길이·출처 대조·정규식)에서 온다.
  *
  * ⚠️ **여기에 자유 문장 칸을 더하지 말 것.** `text` 를 그대로 받게 만드는 순간 A층이
  * 사라지고, 남는 방어는 정규식(B층)과 모델(C층)뿐이다. 둘 다 놓친다.
@@ -66,7 +71,7 @@ data class Candidate(
  * ## 이 파일이 맡는 것은 네 겹 중 둘
  * | 층 | 누가 | 성질 |
  * |---|---|---|
- * | A | 구조적 템플릿([Candidate]) | 값 넣을 칸이 없음 — 어길 수 없음 |
+ * | A | 구조적 템플릿([Candidate]) | 자유 서술 칸을 없앰 — **보장이 아니라 편향**(위 주석) |
  * | **B** | **이 파일** | 결정론적 |
  * | C | 모델 (reconciliation, 5c) | 비결정적 |
  * | D | 사람 (목록 UI) | 최종 |
@@ -82,14 +87,58 @@ data class Candidate(
  */
 object CandidateFilter {
 
+    /**
+     * 그 실행에 대해 **우리가 아는 사실**. `episode` 에서 만든다.
+     *
+     * 왜 필요한가 — 후보의 `sourceTurn`·`pkg` 는 **모델이 신고한 값**이다. 그대로 믿으면
+     * 규칙 A 가 무너진다: 7번 턴에서 뽑고도 `sourceTurn: 3` 이라고 적으면(악의가 아니라
+     * 그냥 틀려도) 오염된 턴 검사를 **조용히 빠져나간다.** *"출처로 자르니 판정이 필요
+     * 없다"* 는 규칙 A 의 장점은 **출처가 사실일 때만** 성립한다.
+     */
+    data class RunFacts(
+        /** 이 실행에 실제로 있었던 턴 번호. */
+        val turns: Set<Int>,
+        /** 그중 `require_confirmation` 이 붙었던 턴(`episode.hadSafety`). */
+        val taintedTurns: Set<Int>,
+        /** 이 실행에서 실제로 포그라운드였던 패키지. */
+        val pkgs: Set<String>,
+    )
+
+    // 길이 상한. 값을 욱여넣기 어렵게 만드는 **결정론적** 장치다 — A층이 '자리를 덜 주는'
+    // 것이라면 이건 그 자리를 더 좁힌다. 숫자에 근거는 없다(지금 쓰는 기억들이 이 안에
+    // 들어온다는 것뿐). 리플렉터를 돌려 보고 조정할 것.
+    private const val MAX_TRIGGER = 80
+    private const val MAX_CONSEQUENCE = 160
+
     /** 통과면 null, 아니면 **사람이 읽을 사유**(실행 로그·목록에 그대로 뜬다). */
-    fun reject(c: Candidate, taintedTurns: Set<Int>): String? {
+    fun reject(c: Candidate, facts: RunFacts): String? {
+        val taintedTurns = facts.taintedTurns
+
+        // ── 형식 — 모델이 칸을 제대로 채웠나 ────────────────────────────
+        if (c.kind !in MemoryGateway.KINDS) return "알 수 없는 종류: ${c.kind}"
+        if (c.trigger.isBlank() || c.consequence.isBlank()) return "빈 칸이 있음"
+        if (c.trigger.length > MAX_TRIGGER)
+            return "trigger 가 너무 김(${c.trigger.length}자) — 값을 욱여넣었을 수 있다"
+        if (c.consequence.length > MAX_CONSEQUENCE)
+            return "consequence 가 너무 김(${c.consequence.length}자) — 값을 욱여넣었을 수 있다"
+
+        // ── 출처 대조 — 모델이 신고한 값을 episode 와 맞춰 본다 ★ ────────
+        //  이게 없으면 규칙 A 가 모델의 자기 신고에 의존한다(위 RunFacts 주석).
+        if (c.sourceTurn !in facts.turns)
+            return "이 실행에 없는 턴(${c.sourceTurn})을 근거로 댐 — 출처를 확인할 수 없다"
+        //  그 실행에서 간 적 없는 앱에 기억을 붙이면, 나중에 그 앱에서 엉뚱한 문장이 뜬다.
+        c.pkg?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.forEach {
+            if (it !in facts.pkgs) return "이 실행에서 간 적 없는 앱($it)에 붙이려 함"
+        }
         // ── 규칙 A — 안전은 학습 대상이 아니다 ──────────────────────────
         //  "저번엔 확인 없이 됐다"가 사실로 승격되면 안전 게이트가 무력화된다.
         //  ★ 내용을 판정하지 않는다. "이게 안전 관련인가"를 문장으로 보려 하면 모델
         //    판단이 끼어들어 비결정적이 된다. 어느 턴에 확인 카드가 떴는지는 우리가
         //    이미 안다(episode.hadSafety) — 그 턴에서 나온 후보를 통째로 버리면
         //    판정이 필요 없다.
+        //  ★ 바로 위에서 sourceTurn 이 실재하는 턴임을 확인했기 때문에 이 검사가 의미를
+        //    갖는다. 순서를 바꾸지 말 것 — 확인 없이 이 줄만 있으면 모델이 턴 번호를
+        //    잘못 적는 것만으로 안전 규칙을 빠져나간다.
         if (c.sourceTurn in taintedTurns)
             return "안전 확인이 붙었던 턴(${c.sourceTurn})에서 나온 후보"
 
