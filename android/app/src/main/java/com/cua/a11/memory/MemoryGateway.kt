@@ -27,15 +27,41 @@ class MemoryGateway(private val dao: MemoryDao) {
         val KINDS = listOf("APP_FACT", "PITFALL")
         val STATES = listOf("ACTIVE", "PENDING", "RETIRED")
         val SENSITIVITIES = listOf("normal", "restricted")
+
+        /**
+         * 이 기억이 **어느 앱에서 보이나**.
+         *  · `pkg`    — `pkg` 칸의 패키지(쉼표로 여러 개) 중 하나가 떠 있을 때
+         *  · `system` — 패키지를 안 본다. 항상 후보
+         *
+         * 설계 명세는 `vendor` 도 두지만 **구현하지 않았다.** 접두사로 제조사를 판정하려
+         * 했는데 실제 데이터가 그걸 허락하지 않는다 — 같은 삼성 기능인데도
+         * `com.android.settings` · `com.samsung.android.lool` · `com.sec.android.app.myfiles`
+         * 로 공통 접두사가 없다. 억지로 목록을 박아 넣느니 쉼표 목록이 정직하다.
+         */
+        val SCOPES = listOf("pkg", "system")
     }
 
     /** 지금 떠 있는 앱에 대한 참고사항. 없으면 null — 그때 요청 본문은 종전과 동일하다. */
     fun readForApp(pkg: String): String? = guard {
         if (pkg == OWN_PACKAGE) return@guard null
         val now = System.currentTimeMillis()
-        val hits = dao.activeForApp(pkg, now, APP_FACT_LINES)
+        val hits = dao.activeAppFacts(now)
+            .filter { appliesTo(it, pkg) }
+            .take(APP_FACT_LINES)
         emit(hits, now)
     }
+
+    /**
+     * 이 기억이 [pkg] 가 떠 있을 때 보여야 하나.
+     *
+     * 한 과제가 여러 패키지를 넘나들기 때문에 `pkg` 는 **쉼표 목록**을 받는다
+     * (근거는 MemoryDao.activeAppFacts 주석 — 74턴 중 22턴에만 붙던 실측).
+     */
+    private fun appliesTo(m: MemoryEntity, pkg: String): Boolean =
+        when (m.scope) {
+            "system" -> true
+            else -> m.pkg?.split(',')?.any { it.trim() == pkg } == true
+        }
 
     /**
      * 목표 문장에 걸리는 함정. 목표는 실행 내내 안 바뀌므로 호출부가 값을 캐시한다.
@@ -98,6 +124,7 @@ class MemoryGateway(private val dao: MemoryDao) {
             text = json.getString("text"),
             pkg = json.optString("pkg").ifBlank { null },
             keywords = json.optString("keywords").ifBlank { null },
+            scope = json.optString("scope").ifBlank { "pkg" },
             state = json.optString("state").ifBlank { "ACTIVE" },
             sensitivity = json.optString("sensitivity").ifBlank { "normal" },
             source = "bench",
@@ -115,10 +142,13 @@ class MemoryGateway(private val dao: MemoryDao) {
     fun validate(m: MemoryEntity): String? {
         if (m.text.isBlank()) return "내용이 비어 있습니다."
         if (m.kind !in KINDS) return "알 수 없는 종류입니다: ${m.kind}"
-        if (m.kind == "APP_FACT") {
-            if (m.pkg.isNullOrBlank())
+        if (m.scope !in SCOPES) return "알 수 없는 범위입니다: ${m.scope}"
+        if (m.kind == "APP_FACT" && m.scope != "system") {
+            val pkgs = m.pkg?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+            if (pkgs.isEmpty())
                 return "APP_FACT 는 패키지명이 있어야 합니다.\n없으면 어떤 앱에서도 조회되지 않습니다."
-            if (m.pkg == OWN_PACKAGE)
+            // ★ 목록 안에 섞여 있어도 막는다. `==` 로만 보면 쉼표 목록에 든 것을 놓친다.
+            if (OWN_PACKAGE in pkgs)
                 return "$OWN_PACKAGE 은 우리 앱 자신이라 주입 대상에서 제외됩니다.\n조작할 앱의 패키지명을 넣으세요."
         }
         if (m.kind == "PITFALL" && m.keywords.isNullOrBlank())

@@ -52,15 +52,27 @@ interface MemoryDao {
     //  지금은 하드 필터만 걸고 LIMIT 으로 자른다.
     //  하드 필터가 곧 설계 §5 ②단계다: ACTIVE · 무효화 안 됨 · 만료 전 · 민감하지 않음.
 
+    /**
+     * ACTIVE 인 APP_FACT 전체. **어느 앱에 붙일지는 코틀린에서 고른다**(MemoryGateway).
+     *
+     * 왜 SQL 에서 `pkg = :pkg` 로 안 자르나 — 한 과제가 **여러 패키지를 넘나든다.**
+     * 실측 2026-09-16: "저장공간 확인"이 `com.android.settings` →
+     * `com.samsung.android.lool`(디바이스 케어) → `com.sec.android.app.myfiles`(저장공간)
+     * 로 이동해, `com.android.settings` 에 묶인 기억이 **74턴 중 22턴에만** 붙었다.
+     * 기억이 가리키는 곳에 에이전트가 들어가는 순간 그 기억이 사라진 것이다.
+     *
+     * 그래서 `pkg` 는 이제 **쉼표로 여러 개**를 담을 수 있고, `scope = "system"` 이면
+     * 패키지를 안 본다. 그 판정이 SQL 로는 지저분해서 코틀린으로 옮겼다 —
+     * PITFALL 키워드 매칭이 이미 같은 이유로 코틀린에 있다(수십 건 규모라 문제없다).
+     */
     @Query(
         "SELECT * FROM memory " +
-        "WHERE kind = 'APP_FACT' AND pkg = :pkg " +
+        "WHERE kind = 'APP_FACT' " +
         "  AND state = 'ACTIVE' AND invalidAt IS NULL AND sensitivity = 'normal' " +
         "  AND (expiresAt IS NULL OR expiresAt > :now) " +
-        "ORDER BY numRecalled DESC, id " +
-        "LIMIT :limit"
+        "ORDER BY numRecalled DESC, id"
     )
-    fun activeForApp(pkg: String, now: Long, limit: Int): List<MemoryEntity>
+    fun activeAppFacts(now: Long): List<MemoryEntity>
 
     /**
      * ACTIVE 인 PITFALL 전체. **키워드 매칭은 코틀린에서 한다.**

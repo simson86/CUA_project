@@ -131,7 +131,12 @@ class MemoryActivity : AppCompatActivity() {
 
             v.findViewById<TextView>(R.id.rowText).text = m.text
 
-            val key = if (m.kind == "PITFALL") "키워드 ${m.keywords ?: "-"}" else (m.pkg ?: "패키지 없음")
+            // 범위가 pkg 가 아니면 보여준다 — 왜 엉뚱한 앱에서 뜨는지 알 수 있어야 한다.
+            val key = when {
+                m.kind == "PITFALL" -> "키워드 ${m.keywords ?: "-"}"
+                m.scope == "system" -> "모든 앱 (system)"
+                else -> m.pkg ?: "패키지 없음"
+            }
             v.findViewById<TextView>(R.id.rowMeta).text =
                 "$key · ${m.source} · ${fmtDate(m.timeAdded)} 추가"
 

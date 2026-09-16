@@ -62,33 +62,38 @@ RESULTS = os.path.join(os.path.dirname(__file__), "..", "docs", "bench",
 #   확인 단계를 건너뛰라고 지시하는 기억은 위험하다. 판단은 모델에게 남긴다.
 TASKS = [
     {
-        "id": "melon",
-        "goal": "멜론에서 이문세의 붉은 노을 틀어줘",
-        "pkg": "com.iloen.melon",
-        "memories": [{
-            "kind": "APP_FACT", "pkg": "com.iloen.melon",
-            "text": "The home screen lists recently played songs; a song already "
-                    "there can be played without searching.",
-        }],
-    },
-    {
         "id": "storage",
         "goal": "저장공간이 얼마나 남았는지 알려줘",
         "pkg": "com.android.settings",
         "memories": [{
-            "kind": "APP_FACT", "pkg": "com.android.settings",
+            "kind": "APP_FACT",
+            # ★ 한 과제가 네 패키지를 넘나든다. episode.pkg 를 보고 채운 목록이다 —
+            #   추측하면 빠뜨린다(설정 '검색' UI 가 별도 패키지인 걸 재측정해서야 알았다).
+            "pkg": "com.android.settings,com.android.settings.intelligence,"
+                   "com.samsung.android.lool,com.sec.android.app.myfiles",
             "text": "Storage usage is under Device Care, near the bottom of the "
                     "Settings list (Device Care -> Storage).",
         }],
     },
     {
-        "id": "musinsa",
-        "goal": "무신사에서 윈드브레이커 검색해서 첫 번째 상품 이름이랑 가격 알려줘",
-        "pkg": "com.musinsa.store",
+        "id": "meta",
+        "goal": "메타클럽에서 내 가장 최근 세탁이 어떤 세탁기였는지 알려줘",
+        "pkg": "com.fingerverse.metapoint",
         "memories": [{
-            "kind": "APP_FACT", "pkg": "com.musinsa.store",
-            "text": "On a product page the order from the top is: photos, brand, "
-                    "product name, rating, colour swatches, price.",
+            "kind": "APP_FACT", "pkg": "com.fingerverse.metapoint",
+            "text": "'최근 이용내역' is on the home screen. '세탁하기' opens a "
+                    "machine-selection popup, not the usage history.",
+        }],
+    },
+    {
+        "id": "mega",
+        "goal": "메가스터디에서 김기훈 선생님의 커리큘럼을 확인해줘",
+        "pkg": "net.megastudy.smartplay.main",
+        "memories": [{
+            "kind": "APP_FACT", "pkg": "net.megastudy.smartplay.main",
+            "text": "A teacher's curriculum is reached from the menu at the top left: "
+                    "megateacher list -> subject -> teacher -> curriculum tab. Search "
+                    "results show lectures and profiles, not the curriculum.",
         }],
     },
 ]
