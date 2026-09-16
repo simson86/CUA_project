@@ -186,8 +186,26 @@ class MemoryActivity : AppCompatActivity() {
             sp.setSelection(items.indexOf(want).coerceAtLeast(0))
         }
         fill(kindSp, MemoryGateway.KINDS, existing?.kind)
-        fill(stateSp, MemoryGateway.STATES, existing?.state ?: "ACTIVE")
         fill(sensSp, MemoryGateway.SENSITIVITIES, existing?.sensitivity)
+
+        // ── 상태는 '새로 만들 때'와 '고칠 때'의 요구가 정반대다 ────────────────
+        //  새 기억: ACTIVE 로 고정한다. 명세 §7 이 **사람의 판단 = 즉시 ACTIVE** 로 못
+        //   박았고, PENDING 은 *기계 출력*을 담는 검역이라 사람이 직접 쓴 문장을 거기
+        //   넣을 이유가 없다. 게다가 지금은 나가는 문이 없어(승격 = reconciliation,
+        //   Unit 5) 고르는 순간 **주입도 승격도 안 되는 행**이 된다.
+        //  고칠 때: 세 상태를 모두 연다. 리플렉터가 쌓은 PENDING 후보를 사람이 보고
+        //   ACTIVE 로 올리는 것이 설계 §8 이 말한 '아키텍처의 일부'다.
+        //
+        //  ⚠️ 여기서 MemoryGateway.STATES 자체를 줄이지 말 것. 줄이면 fill() 의
+        //   indexOf(...).coerceAtLeast(0) 이 목록에 없는 값을 **0번(ACTIVE)** 으로
+        //   되돌려, 사람이 PENDING 후보를 열었다 저장하는 것만으로 **검역이 조용히
+        //   풀린다.** 선택지를 좁히는 일은 이 분기에서만 한다.
+        if (existing == null) {
+            fill(stateSp, listOf("ACTIVE"), "ACTIVE")
+            stateSp.isEnabled = false
+        } else {
+            fill(stateSp, MemoryGateway.STATES, existing.state)
+        }
 
         // 종류에 따라 검색 키가 다르다 — APP_FACT 는 패키지로, PITFALL 은 키워드로 걸린다.
         // 둘 다 보여주면 엉뚱한 칸을 채우고 "저장은 됐는데 안 나온다"가 된다.
