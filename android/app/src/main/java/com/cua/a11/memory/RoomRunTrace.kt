@@ -43,10 +43,20 @@ class RoomRunTrace(
     /**
      * 깃발은 **여기서 가져가며 지운다**(시작이 아니라 종료에서). 시작에서 지우면
      * `runAgent` 가 `onRunStart` 보다 **먼저** 부르는 `taskNote` 의 실패가 지워진다.
+     *
+     * ★ **swallow 를 둘로 나눈 건 의도적이다.** 한 블록에 묶으면 `finishRun` 이 실패했을 때
+     * `settleRun` 이 아예 안 불리고, 그러면 게이트웨이의 주입 버퍼가 안 비워져 **이번 실행의
+     * 기억이 다음 실행의 결과로 채점된다.** 실패를 삼키는 코드일수록 무엇이 건너뛰어지는지를
+     * 봐야 한다.
      */
-    override fun onRunEnd(runId: String, outcome: String, turnsUsed: Int) = swallow {
-        dao.finishRun(runId, outcome, turnsUsed, System.currentTimeMillis(),
-            gateway.takeFailureForRun())
+    override fun onRunEnd(runId: String, outcome: String, turnsUsed: Int) {
+        swallow {
+            dao.finishRun(runId, outcome, turnsUsed, System.currentTimeMillis(),
+                gateway.takeFailureForRun())
+        }
+        // 승격 카운터(Unit 6). run 행이 갱신된 뒤에 부른다 — recallStats 가 outcome 을
+        // 조인해 읽으므로 순서가 뒤집히면 방금 끝난 실행이 집계에서 빠진다.
+        swallow { gateway.settleRun(runId, outcome) }
     }
 
     private inline fun swallow(body: () -> Unit) {

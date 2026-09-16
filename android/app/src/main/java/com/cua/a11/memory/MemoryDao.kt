@@ -12,6 +12,14 @@ data class ActionCount(val action: String?, val n: Int)
 data class PkgVersionSpread(val pkg: String, val versions: Int)
 
 /**
+ * 기억 하나의 주입 이력 요약 (Unit 6).
+ * `runs` 와 `injections` 를 **나눠서** 준다 — numRecalled 는 이 둘을 섞어 놔서
+ * "한 실행에서 20번 주입"과 "20개 실행에서 한 번씩"을 구분하지 못한다. 근거의 강도는
+ * 앞이 아니라 **뒤**인데 지금 랭킹은 앞을 보고 정렬한다(Unit 7 에서 답할 문제).
+ */
+data class RecallStat(val memoryId: Long, val runs: Int, val injections: Int, val successes: Int)
+
+/**
  * 전부 **블로킹** 메서드다. runAgent 가 코루틴이 아니라 백그라운드 스레드에서 돌고
  * (CuClient.kt 의 "반드시 백그라운드 스레드에서 호출" 주석 참조) 이 코드베이스에 코루틴이
  * 없으므로, suspend 를 쓰면 호출부에만 스코프가 새로 필요해진다.
@@ -118,4 +126,56 @@ interface MemoryDao {
     @Query("SELECT pkg, COUNT(DISTINCT pkgVersion) AS versions FROM episode " +
            "WHERE pkg IS NOT NULL GROUP BY pkg ORDER BY versions DESC")
     fun versionSpread(): List<PkgVersionSpread>
+
+    // ── 승격 카운터 (Unit 6) ──────────────────────────────
+    //  점수를 움직이는 코드는 **여기 넷뿐이다.** 흩어 놓으면 "실행당 1회"가 어디선가
+    //  깨지는데, 그 증상은 조용하다 — 기억이 한 실행 만에 ACTIVE 로 올라가 버린다.
+
+    /** 주입 기록. 실행이 끝날 때 한 번에 쓴다 — 그래야 runId 가 확정돼 있다. */
+    @Insert fun insertRecalls(rows: List<MemoryRecallEntity>)
+
+    /**
+     * 성공한 실행에 주입됐다 → `score + 1`, **상한 4**(명세 §7 개정 3).
+     *
+     * 상한이 필요한 이유는 랭킹이다 — 없으면 매일 쓰는 앱의 기억이 무한정 부풀어
+     * 갓 승격된 기억과 영영 같은 줄에 설 수 없다.
+     *
+     * `pinned` 도 올린다. 면제 대상은 **강등**이지 승격이 아니다 — 사람이 고정한 기억이
+     * 실전에서 통했다면 그 사실은 그대로 기록돼야 한다.
+     */
+    @Query("UPDATE memory SET score = MIN(score + 1, 4) WHERE id IN (:ids)")
+    fun raiseScore(ids: List<Long>): Int
+
+    /** 실패한 실행에 주입됐다 → `score - 1`. **`pinned` 는 면제**(사람이 손댄 것). */
+    @Query("UPDATE memory SET score = score - 1 WHERE id IN (:ids) AND pinned = 0")
+    fun lowerScore(ids: List<Long>): Int
+
+    /**
+     * 검역 해제: PENDING 이 `score >= 2` 가 되면 ACTIVE.
+     *
+     * **"2회"는 반드시 실행 간이다**(명세 §7). 그래서 이 갱신은 실행이 끝날 때 한 번만
+     * 불려야 하고, 주입 지점(markRecalled)에 걸면 안 된다 — 거기 걸면 한 실행의
+     * 두 턴만으로 검역이 풀린다.
+     */
+    @Query("UPDATE memory SET state = 'ACTIVE' " +
+           "WHERE id IN (:ids) AND state = 'PENDING' AND score >= 2")
+    fun activateProven(ids: List<Long>): Int
+
+    /**
+     * 소진: `score <= 0` 이면 RETIRED + `invalidAt` 기록.
+     * **무효화는 삭제가 아니다** — 사람이 목록에서 보고 되살릴 수 있어야 한다.
+     */
+    @Query("UPDATE memory SET state = 'RETIRED', invalidAt = :now " +
+           "WHERE id IN (:ids) AND state != 'RETIRED' AND score <= 0 AND pinned = 0")
+    fun retireExhausted(ids: List<Long>, now: Long): Int
+
+    /**
+     * 목록 UI·측정용 요약. `run` 을 조인해 성공 수까지 센다.
+     * ⚠️ 별칭을 `rn` 으로 둔 건 습관이 아니다 — 이 DB 에서 `action` 이 예약어라
+     * `AS action` 이 파싱 실패한 전례가 있다. 짧고 안전한 이름으로 둔다.
+     */
+    @Query("SELECT r.memoryId AS memoryId, COUNT(*) AS runs, SUM(r.injections) AS injections, " +
+           "SUM(CASE WHEN rn.outcome = 'success' THEN 1 ELSE 0 END) AS successes " +
+           "FROM memory_recall r JOIN run rn ON rn.id = r.runId GROUP BY r.memoryId")
+    fun recallStats(): List<RecallStat>
 }

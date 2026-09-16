@@ -83,8 +83,62 @@ class MemoryGateway(private val dao: MemoryDao) {
     private fun emit(hits: List<MemoryEntity>, now: Long): String? {
         if (hits.isEmpty()) return null
         dao.markRecalled(hits.map { it.id }, now)
+        hits.forEach { injected.merge(it.id, 1, Int::plus) }
         return hits.joinToString(" ") { it.text }
     }
+
+    // ── 승격 카운터 (Unit 6) ─────────────────────────────────────────────
+    /**
+     * 이번 실행에 주입된 기억 — `id → 주입 횟수`. 실행이 끝날 때 표로 내보내고 비운다.
+     *
+     * **왜 RAM 을 거치나 — 주입 시점에는 `runId` 가 없다.** `readForApp`/`readForTask` 는
+     * `Executor` 계약을 통해 불리는데 그 계약에 `runId` 가 없고, 넣으면 판단 코어가
+     * 기억을 알게 된다. 그래서 id 만 모아 뒀다가 `runId` 가 확정된 `onRunEnd` 에서 쓴다.
+     *
+     * ⚠️ **실행 시작에서 비우면 안 된다.** `runAgent` 는 `taskNote()` 를 `onRunStart` 보다
+     * **먼저** 부른다 — 시작에서 비우면 방금 담긴 PITFALL 이 지워져 그 기억은 영영 점수를
+     * 못 받는다. 읽기 실패 깃발이 "종료에서 소비"인 것과 **정확히 같은 이유**다.
+     *
+     * 동시 실행은 `agentBusy`(앱 UI·소켓 공유)가 막으므로 실행 하나분만 담긴다.
+     */
+    private val injected = java.util.concurrent.ConcurrentHashMap<Long, Int>()
+
+    /**
+     * 실행 종료 처리. 주입 기록을 남기고 결과에 따라 점수를 움직인다.
+     *
+     * **`outcome` 넷 중 둘만 증거다:**
+     * | `success` | +1 (상한 4) | 실제로 통했다 |
+     * | `fail` | −1 | 최대 턴까지 갔다 — 약한 신호 |
+     * | `aborted` | **건드리지 않음** | 사람이 멈췄거나 승인을 거부했다 |
+     * | `error` | **건드리지 않음** | 예외 — 화면 꺼짐·네트워크·dispatch 실패 |
+     *
+     * ⚠️ `aborted`·`error` 를 실패로 묶으면 **Wi-Fi 가 끊긴 것만으로 멀쩡한 기억이 두 번
+     * 만에 RETIRED 로 내려간다.** `runAgent` 의 `outcome` 초기값이 `"error"` 라서
+     * (예외로 빠져나가면 아무도 못 덮는다) "성공이 아니면 깎는다"로 짜는 순간 **모든 예외가
+     * 곧 강등**이 된다. 반드시 두 값을 이름으로 집어서 분기할 것.
+     *
+     * 주입 기록 자체는 네 경우 모두 남긴다 — 점수와 무관하게 **주입은 일어난 사실**이다.
+     */
+    fun settleRun(runId: String, outcome: String) {
+        // ★ 먼저 스냅샷을 뜨고 비운다. 아래에서 DB 가 실패해도 이번 실행의 id 가
+        //   다음 실행으로 새지 않는다 — 새면 엉뚱한 기억이 남의 성적표를 받는다.
+        val snapshot = injected.toMap()
+        injected.clear()
+        if (snapshot.isEmpty()) return
+
+        val now = System.currentTimeMillis()
+        dao.insertRecalls(snapshot.map { (id, n) -> MemoryRecallEntity(runId, id, n, now) })
+
+        val ids = snapshot.keys.toList()
+        when (outcome) {
+            "success" -> { dao.raiseScore(ids); dao.activateProven(ids) }
+            "fail"    -> { dao.lowerScore(ids); dao.retireExhausted(ids, now) }
+            else      -> Unit   // aborted · error — 기억에 대한 증거가 아니다
+        }
+    }
+
+    /** 목록 UI·측정용. `memoryId → (실행 수, 주입 횟수, 성공 수)`. */
+    fun recallStats(): Map<Long, RecallStat> = dao.recallStats().associateBy { it.memoryId }
 
     // ── 목록 UI (Unit 3) ─────────────────────────────────────────────────
     //  **읽기와 달리 여기서는 실패를 삼키지 않는다.** 에이전트 경로에서 "기억이 없다"와

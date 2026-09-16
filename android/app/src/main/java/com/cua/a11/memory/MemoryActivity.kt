@@ -40,6 +40,8 @@ class MemoryActivity : AppCompatActivity() {
     private val gateway by lazy { MemoryGateway(MemoryDb.get(this).dao()) }
 
     private var rows: List<MemoryEntity> = emptyList()
+    /** 기억별 주입 이력(Unit 6). 목록과 함께 한 번에 읽는다. */
+    private var stats: Map<Long, RecallStat> = emptyMap()
     private lateinit var adapter: RowAdapter
 
     private lateinit var listView: ListView
@@ -75,8 +77,9 @@ class MemoryActivity : AppCompatActivity() {
 
     // ── 데이터 ────────────────────────────────────────────────────────
     /** Room 은 메인 스레드에서 부르면 예외를 던진다 — 읽기도 반드시 백그라운드에서. */
-    private fun reload() = io({ gateway.list() }) { loaded ->
+    private fun reload() = io({ gateway.list() to gateway.recallStats() }) { (loaded, st) ->
         rows = loaded
+        stats = st
         adapter.notifyDataSetChanged()
         val active = loaded.count { it.state == "ACTIVE" }
         // '한 번도 안 걸린 것'을 요약에 올린다. 그 수가 크면 기억이 없는 게 아니라
@@ -121,7 +124,9 @@ class MemoryActivity : AppCompatActivity() {
                 .inflate(R.layout.item_memory, parent, false)
             val m = rows[position]
 
-            val head = StringBuilder("${m.kind} · ${m.state}")
+            // 점수는 Unit 6 부터 **자동으로 움직인다.** 화면에 없으면 사용자는 상태가
+            // 왜 바뀌었는지 알 수 없다(PENDING → ACTIVE 는 score >= 2 에서 일어난다).
+            val head = StringBuilder("${m.kind} · ${m.state} · 점수 ${m.score}")
             if (m.pinned) head.append(" · 고정")
             if (m.sensitivity != "normal") head.append(" · ${m.sensitivity}")
             // 주입을 막는 사유는 목록에서 바로 보여야 한다. 안 그러면 사용자는 ACTIVE 인데
@@ -146,7 +151,13 @@ class MemoryActivity : AppCompatActivity() {
             v.findViewById<TextView>(R.id.rowRecall).text = when {
                 m.state != "ACTIVE" -> "주입 대상 아님 (${m.state})"
                 m.numRecalled == 0 -> "아직 한 번도 안 걸림 — 검색 키를 확인해 보세요"
-                else -> "주입 ${m.numRecalled}회 · 마지막 ${m.lastAccessed?.let { fmtDate(it) } ?: "?"}"
+                else -> buildString {
+                    append("주입 ${m.numRecalled}회")
+                    // numRecalled 는 주입 '횟수'라, 한 실행에서 20번 붙은 것과 20개 실행에
+                    // 한 번씩 붙은 것이 같은 숫자가 된다. 근거의 강도는 실행 수 쪽이다.
+                    stats[m.id]?.let { append(" · ${it.runs}개 실행(성공 ${it.successes})") }
+                    append(" · 마지막 ${m.lastAccessed?.let { t -> fmtDate(t) } ?: "?"}")
+                }
             }
             return v
         }
