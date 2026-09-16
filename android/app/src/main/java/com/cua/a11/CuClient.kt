@@ -289,6 +289,46 @@ class CuClient(private val apiKey : String,
         }
     }
 
+    /**
+     * **다른 엔드포인트다** — 글을 주고 JSON 을 받는 일반 호출(`:generateContent`).
+     * 리플렉터(Unit 5b)가 쓴다. 스크린샷도 액션도 대화 이력도 없다.
+     *
+     * ⚠️ **`cuCall` 의 형식 규칙을 여기로 가져오지 말 것.** 이 저장소에 *"이 서버는 중첩을
+     * 안 받는다"* 가 세 번 적혀 있는데(안전 승인·사고수준·커스텀 함수) **그건 전부
+     * `/interactions` 이야기**다. 일반 `generateContent` 는 문서·SDK 형식이 맞고
+     * `thinking_config` 도 **중첩**이 정상이다(`docs/reference/thinking-level.md`).
+     * 반대 규칙을 쓰는 두 주소이므로 복사하면 400 이다.
+     *
+     * 지금은 사고수준을 **아예 안 보낸다** — 안 보내면 그 함정을 밟을 일이 없고,
+     * 리플렉터에 사고수준이 필요하다는 근거도 아직 없다.
+     *
+     * `response_mime_type` 으로 JSON 을 강제한다. 그래도 모델이 코드펜스를 씌우는 경우가
+     * 있어 호출부에서 한 번 더 벗긴다.
+     */
+    fun generateJson(prompt: String, model: String = DEFAULT_MODEL): String {
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject()
+                .put("role", "user")
+                .put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+            .put("generationConfig", JSONObject()
+                .put("responseMimeType", "application/json"))
+
+        val req = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+            .addHeader("x-goog-api-key", apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        http.newCall(req).execute().use { resp ->
+            val txt = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${txt.take(300)}")
+            return JSONObject(txt)
+                .getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+                .getString("text")
+        }
+    }
+
     // ── 응답 파싱 (원본 cua/actions.py) ──────────────────────────
     /** 실행할 function_call step들 (원본 parse_actions) */
     fun functionCalls(resp: JSONObject): List<JSONObject> {

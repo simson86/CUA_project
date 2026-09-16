@@ -14,6 +14,18 @@ class RoomRunTrace(
     private val dao: MemoryDao,
     /** 읽기 실패 깃발의 주인. 종료 시 한 번 가져가 run 행에 남긴다. */
     private val gateway: MemoryGateway,
+    /**
+     * 실행이 끝났음을 알리는 훅 (Unit 5b 리플렉터).
+     *
+     * **여기 거는 이유** — `runAgent` 의 `finally` 가 부르는 이 지점이 앱 UI·소켓 두 경로가
+     * 모두 지나는 **유일한 공통 자리**다. 호출부마다 붙이면 새 실행 경로를 만들 때 빠뜨린다
+     * (소켓 `RUN` 이 `cancel` 을 안 넘겨 중단이 아예 안 됐던 일이 그 예다).
+     *
+     * ⚠️ **이 훅은 즉시 반환해야 한다.** 여기서 리플렉터를 그대로 돌리면 소켓 응답이
+     * 그만큼 늦어져 측정 벽시계가 오염되고, `agentBusy` 도 그동안 잡혀 있어 다음 `RUN` 이
+     * "이미 실행 중입니다" 로 거절된다. 구현은 큐에 넣기만 한다(a11service).
+     */
+    private val onRunFinished: (String) -> Unit = {},
 ) : RunTrace {
 
     override fun onRunStart(
@@ -57,6 +69,10 @@ class RoomRunTrace(
         // 승격 카운터(Unit 6). run 행이 갱신된 뒤에 부른다 — recallStats 가 outcome 을
         // 조인해 읽으므로 순서가 뒤집히면 방금 끝난 실행이 집계에서 빠진다.
         swallow { gateway.settleRun(runId, outcome) }
+        // 리플렉터(Unit 5b)는 **맨 마지막**이다. settleRun 이 memory_recall 을 쓴 뒤라야
+        // injectedIn(runId) 가 "이 실행에 주입됐던 기억" 을 돌려준다 — 리플렉터의 세 번째
+        // 입력이고, 없으면 이미 아는 것을 매번 새로 발견한다.
+        swallow { onRunFinished(runId) }
     }
 
     private inline fun swallow(body: () -> Unit) {

@@ -58,6 +58,25 @@ class MemoryGateway(private val dao: MemoryDao) {
          * 로 공통 접두사가 없다. 억지로 목록을 박아 넣느니 쉼표 목록이 정직하다.
          */
         val SCOPES = listOf("pkg", "system")
+
+        // ── 리플렉터 스위치 (Unit 5b) ───────────────────────────
+        //  왜 설정이 필요한가 — 측정 배치에서는 꺼야 한다. 켜 두면 실행마다 API 를 한 번
+        //  더 쓰고, 무엇보다 **측정 중에 기억이 늘어난다.** 반대로 판단 ②(종단 측정)는
+        //  켜 놓고 오래 돌려야 성립하므로 '소켓이면 끈다' 같은 고정 규칙으로는 안 된다.
+        //
+        //  ★ 기본값은 꺼짐이다. 자동 쓰기는 사람이 한 번 켜는 동작을 거쳐야 한다 —
+        //    §3 의 C층(모델 판정)이 아직 없어서 지금은 D층(목록 UI)이 유일한 내용 방어선이다.
+        private const val PREFS = "cua"
+        private const val KEY_REFLECTOR = "reflector_enabled"
+
+        fun reflectorEnabled(ctx: android.content.Context): Boolean =
+            ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .getBoolean(KEY_REFLECTOR, false)
+
+        fun setReflectorEnabled(ctx: android.content.Context, on: Boolean) {
+            ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_REFLECTOR, on).apply()
+        }
     }
 
     /** 지금 떠 있는 앱에 대한 참고사항. 없으면 null — 그때 요청 본문은 종전과 동일하다. */

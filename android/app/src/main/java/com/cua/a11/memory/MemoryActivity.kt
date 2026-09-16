@@ -60,6 +60,22 @@ class MemoryActivity : AppCompatActivity() {
 
         listView.setOnItemClickListener { _, _, pos, _ -> showEditor(rows[pos]) }
 
+        // 자동 추출 스위치 (Unit 5b). 여기 둔 이유 — 기억을 보는 화면과 기억이 생기는
+        // 규칙을 같은 자리에서 다루는 게 맞다. 켜면 그 결과가 바로 이 목록에 PENDING 으로
+        // 쌓이므로, 켠 사람이 결과를 보는 화면도 여기다.
+        findViewById<CheckBox>(R.id.memReflector).apply {
+            isChecked = MemoryGateway.reflectorEnabled(this@MemoryActivity)
+            setOnCheckedChangeListener { _, on ->
+                MemoryGateway.setReflectorEnabled(this@MemoryActivity, on)
+                Toast.makeText(
+                    this@MemoryActivity,
+                    if (on) "자동 추출 켜짐 — 후보는 검토 대기(PENDING)로 쌓입니다"
+                    else "자동 추출 꺼짐",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+
         findViewById<Button>(R.id.memAddBtn).setOnClickListener { showEditor(null) }
         findViewById<Button>(R.id.memClearBtn).setOnClickListener { confirmClearAll() }
 

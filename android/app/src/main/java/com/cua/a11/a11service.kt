@@ -419,7 +419,39 @@ class a11service : AccessibilityService(), Executor {
     private val memoryDao by lazy { com.cua.a11.memory.MemoryDb.get(this).dao() }
     private val gateway by lazy { com.cua.a11.memory.MemoryGateway(memoryDao) }
     private val runTrace: com.cua.a11.RunTrace by lazy {
-        com.cua.a11.memory.RoomRunTrace(memoryDao, gateway)
+        com.cua.a11.memory.RoomRunTrace(memoryDao, gateway, ::queueReflection)
+    }
+
+    // ── 리플렉터 (Unit 5b) ───────────────────────────────────────────────
+    /**
+     * **단일 스레드 큐**다. 별도 깃발(`reflectorBusy` 같은) 대신 이걸 쓰는 이유:
+     *  · 스레드가 하나라 리플렉터가 **겹칠 수가 없다** — 앞엣것이 끝나야 뒤엣것이 시작된다.
+     *  · 깃발이 아니라 구조라서 **샐 수가 없다.** `agentBusy` 가 true 로 새면 이후 모든
+     *    실행이 영구히 막히는데(위 주석), 큐에는 그런 실패 모드가 없다.
+     *  · 배치를 빠르게 돌려 리플렉터가 밀리면 **쌓일 뿐** 아무것도 안 깨진다.
+     */
+    private val reflectorPool = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val reflector by lazy { com.cua.a11.memory.Reflector(cu, memoryDao, gateway) }
+
+    /**
+     * 실행이 끝났다 — 되새김을 **큐에 넣기만 하고 즉시 반환한다.**
+     *
+     * ★ 여기서 그냥 돌리면 안 된다. 이 함수는 `runAgent` 의 `finally` 안에서 불리므로,
+     *   리플렉터가 끝날 때까지 ⑴ 소켓 응답이 안 나가고(측정 벽시계 오염) ⑵ `agentBusy` 가
+     *   잡혀 있어 다음 `RUN` 이 "이미 실행 중입니다" 로 거절된다. 하네스는 응답을 받자마자
+     *   다음 `RUN` 을 보내므로 **가끔** 깨진다 — 제일 찾기 어려운 종류다.
+     *
+     * 리플렉터는 화면을 안 만지므로 다음 실행과 겹쳐도 충돌하지 않는다(`agentBusy` 가
+     * 지키는 것은 화면이다). 쓰는 것도 `PENDING` 뿐이라 다음 실행의 주입을 바꾸지 않는다.
+     * ⚠️ 5c 에서 reconciliation 이 `ACTIVE` 로 승격시키기 시작하면 그 전제가 깨진다 —
+     *    실행 도중에 주입 내용이 바뀔 수 있다. 그때 이 주석을 다시 읽을 것.
+     */
+    private fun queueReflection(runId: String) {
+        if (!com.cua.a11.memory.MemoryGateway.reflectorEnabled(this)) return
+        // 실행 로그(`log` 람다)는 실행마다 넘겨받는 것이라 여기서는 이미 끝났다. 되새김의
+        // 흔적은 logcat(`a11mem`)과 **기억 목록**에 남는다 — 후보 자체가 `PENDING` 행으로
+        // 뜨고 출처가 `reflector` 로 찍히므로, 사람이 보는 면은 그쪽이 맞다.
+        reflectorPool.submit { reflector.reflect(runId) }
     }
 
     private fun captureOnce(): ByteArray {

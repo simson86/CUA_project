@@ -170,6 +170,19 @@ interface MemoryDao {
     fun retireExhausted(ids: List<Long>, now: Long): Int
 
     /**
+     * 이 실행에 **주입됐던 기억**. 리플렉터(Unit 5b)의 세 번째 입력이다.
+     *
+     * 설계 §2 가 입력을 셋으로 잡는데 이게 빠지면 *"리플렉터가 이미 아는 것을 매번 새로
+     * 발견한다"*. `memory_recall` 이 write-only 를 벗어나는 지점이기도 하다.
+     *
+     * 사람이 그 기억을 지웠으면 조인에서 빠진다 — 외래키가 없어 고아 행이 남기 때문인데,
+     * 리플렉터 입장에선 그게 맞다(없는 기억을 "이미 안다"고 알려줄 이유가 없다).
+     */
+    @Query("SELECT m.* FROM memory m JOIN memory_recall r ON r.memoryId = m.id " +
+           "WHERE r.runId = :runId ORDER BY m.id")
+    fun injectedIn(runId: String): List<MemoryEntity>
+
+    /**
      * 목록 UI·측정용 요약. `run` 을 조인해 성공 수까지 센다.
      * ⚠️ 별칭을 `rn` 으로 둔 건 습관이 아니다 — 이 DB 에서 `action` 이 예약어라
      * `AS action` 이 파싱 실패한 전례가 있다. 짧고 안전한 이름으로 둔다.
