@@ -204,9 +204,14 @@ def reset(pkg):
     time.sleep(SETTLE_S)
 
 
-def one_run(task, cond):
-    """실행 1회. 돌려주는 dict 가 그대로 결과 파일 한 줄이 된다."""
-    memories = task["memories"] if cond == "B" else []
+def one_run(task, cond, memories=None):
+    """실행 1회. 돌려주는 dict 가 그대로 결과 파일 한 줄이 된다.
+
+    [memories] 를 주면 그걸 쓰고, 안 주면 종전대로 cond=="B" 일 때만 task 의 것을 쓴다.
+    조건이 둘보다 많은 실험(tools/bench_template.py)이 이 함수를 그대로 쓰기 위한 것 —
+    검증(DUMP 대조)이 여기 들어 있어서 복사해 가면 그 검증이 갈라진다."""
+    if memories is None:
+        memories = task["memories"] if cond == "B" else []
     reset(task["pkg"])
     set_memory(memories)
 
