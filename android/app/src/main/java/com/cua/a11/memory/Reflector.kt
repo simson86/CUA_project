@@ -83,11 +83,21 @@ class Reflector(
      * **가장 중요한 부분은 "0건이 정답일 때가 많다" 이다**(설계 §2). 억지로 뽑은 후보가
      * 곧 노이즈가 되고, 그 노이즈는 reconciliation 대조 비용까지 늘린다.
      *
-     * 두 번째로 중요한 것은 **방향**이다. 2026-09-16 실측: 같은 과제에서 경로를 알려준
-     * 기억은 −47%, *"검색해도 없다"* 는 부정 사실만 준 기억은 **0%** 였다(기억 없는 조건과
-     * 차이 없음). 값어치는 그 문장이 **후보를 몇 개나 지우느냐**에 비례한다 — 부정 정보는
-     * 하나를 지우고 경로는 나머지를 전부 지운다. 그래서 *"함정을 찾아라"* 가 아니라
-     * **"후보를 가장 많이 지운 발견"** 을 묻는다.
+     * 두 번째 — **읽는 쪽이 이미 가진 것을 빼고 남는 것만** 쓰게 한다. 에이전트는 ⑴ 눈앞의
+     * 스크린샷과 ⑵ 안드로이드 앱 일반 관례에 대한 사전지식을 이미 갖고 있다. 둘 중 하나를
+     * 되풀이하는 문장은 값이 0 이다.
+     *
+     * 그래서 값이 있는 것은 정확히 두 갈래다:
+     *  · **방향** — *"X 를 하면 Y 에 닿는다"*. 화면이 못 주는 것(다음 화면)이라 **턴을 줄인다.**
+     *    2026-09-16 실측: 경로 기억 −47%, *"검색해도 없다"* 는 부정 사실만 준 기억 **0%**.
+     *    값어치는 그 문장이 **후보를 몇 개나 지우느냐**에 비례한다.
+     *  · **예외** — *"이 앱은 관례를 어긴다"*. 사전지식이 못 주는 것이라 **실수를 막는다.**
+     *    턴은 한 개도 안 줄일 수 있지만, 모델이 **자신 있게 틀리는 것**을 막는다.
+     *
+     * ⚠️ **초판에는 앞엣것만 있었다.** 규칙이 *"후보를 가장 많이 지우는 것"* 뿐이라
+     * 경로 쪽으로만 유도했는데, 관례 위반은 후보를 많이 지우지 않는다. 그리고 **우리
+     * 측정은 턴 수만 쟀지 정확도를 잰 적이 없어서**(MEMORY.md 의 열린 질문) 그 공백이
+     * 수치로는 안 보였다.
      */
     private fun prompt(run: RunEntity, eps: List<EpisodeEntity>, known: List<MemoryEntity>): String {
         val log = eps.joinToString("\n") { e ->
@@ -120,16 +130,27 @@ Return JSON: {"candidates": [ ... ]} with 0 or more items shaped like
 
 RULES
 1. RETURNING ZERO CANDIDATES IS THE NORMAL, CORRECT ANSWER. Most runs teach nothing.
-   A candidate is only worth writing down if it would have saved turns on this run,
-   or will plainly save turns on a similar future run. If you are unsure, return none.
-2. Prefer facts that NARROW THE SEARCH THE MOST. "Tapping X leads to Y" is worth far
-   more than "Y is not under X". A fact that only rules one place out leaves the agent
-   still searching, and measurement shows it saves nothing.
+   If you are unsure, return none.
+2. The agent that will read your note ALREADY has two things: the screenshot in front of
+   it, and everything you know about how Android apps normally behave. A note that only
+   repeats either of those is worthless — do not write it. Exactly two kinds of note are
+   worth writing:
+   (a) DIRECTION — "doing X leads to Y". This is what saves turns: it tells the agent
+       where to go next, which the screen cannot. Prefer the note that narrows the search
+       the most. "Tapping X leads to Y" is worth far more than "Y is not under X"; ruling
+       one place out leaves the agent still searching and measurably saves nothing.
+   (b) SURPRISE — where THIS app contradicts what you would expect of a typical Android
+       app: a control that does not do what its label or shape suggests, a back gesture
+       that exits instead of going back, a list that reorders between visits, a keypad
+       whose digits move. These may not save a single turn, but they stop the agent from
+       confidently doing the wrong thing, which is worth just as much.
 3. Write what the app IS LIKE, not what to do. Describe structure, never give orders,
    and never tell the agent to skip a verification step.
 4. Only durable app structure. Never record values read off the screen: names, people,
    message text, balances, prices, codes, search history, times, counts of the user's
    own items. If a fact would not be true on a stranger's phone, it is not a fact.
+   Labels the app itself draws for everyone (menu names, tab names, button text) ARE
+   part of the structure and belong in the note.
 5. source_turn must be a turn number that appears in the log above.
    pkg must be a package that appears in the log above.
 6. Keep trigger under 80 characters and consequence under 160.
