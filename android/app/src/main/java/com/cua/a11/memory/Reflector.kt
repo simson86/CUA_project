@@ -110,6 +110,18 @@ class Reflector(
                     log("[리플렉터] 재관측 — #${v.id} (${v.why})")
                     true
                 }
+                "DUPLICATE" -> {
+                    // 남길 쪽도 우리가 보여준 것이어야 한다 — 위의 id 검사는 접는 쪽만 본다.
+                    val keep = v.sameAs
+                    if (keep == null || keep !in shown) {
+                        log("[리플렉터] 버림 — DUPLICATE: 보여주지 않은 sameAs($keep)")
+                        return false
+                    }
+                    val ok = gateway.mergeInto(v.id!!, keep)
+                    log(if (ok) "[리플렉터] 중복 접음 — #${v.id} → #$keep (${v.why})"
+                        else "[리플렉터] 중복 접기 건너뜀 — #${v.id}")
+                    ok
+                }
                 "DELETE" -> {
                     val ok = gateway.retireByVerdict(v.id!!)
                     log(if (ok) "[리플렉터] 무효화 — #${v.id} (${v.why})"
@@ -189,6 +201,9 @@ Return JSON: {"verdicts": [ ... ]}, zero or more of:
   {"verdict":"DELETE", "id":N, "why":"…"}     // this run contradicted it
   {"verdict":"UPDATE", "id":N, "kind":…, "trigger":…, "consequence":…, "pkg":…,
                        "source_turn":N, "why":"…"}   // replace with a better statement
+  {"verdict":"DUPLICATE", "id":N, "sameAs":M, "why":"…"}
+                       // two memories ALREADY IN THE LIST say the same thing;
+                       // id is the one to fold away, sameAs is the one to keep
 
 RULES
 1. RETURNING ZERO VERDICTS IS THE NORMAL, CORRECT ANSWER. Most runs teach nothing.
@@ -197,7 +212,12 @@ RULES
    says — even worded completely differently — return NOOP with its id instead of writing
    it again as ADD. A memory in state PENDING is unverified and is NOT being shown to the
    agent; NOOP is the only way it can ever become trusted, so look for it deliberately.
-3. The agent that will read these notes ALREADY has two things: the screenshot in front
+3. ALSO LOOK AT THE LIST ITSELF. If two memories already in the list say the same
+   thing in different words, return DUPLICATE for the weaker one, keeping the clearer
+   or more specific one. Injection budget is only two lines per app, so a duplicate
+   costs half of it. This is separate from NOOP — NOOP compares this run against one
+   memory; DUPLICATE compares two memories against each other.
+4. The agent that will read these notes ALREADY has two things: the screenshot in front
    of it, and everything you know about how Android apps normally behave. A note that
    only repeats either of those is worthless — do not write it. Exactly two kinds are
    worth writing:
@@ -210,9 +230,9 @@ RULES
        that exits instead of going back, a list that reorders between visits, a keypad
        whose digits move. These may not save a single turn, but they stop the agent from
        confidently doing the wrong thing, which is worth just as much.
-4. Write what the app IS LIKE, not what to do. Describe structure, never give orders,
+5. Write what the app IS LIKE, not what to do. Describe structure, never give orders,
    and never tell the agent to skip a verification step.
-5. NEVER record anything that belongs to THIS PERSON rather than to the app: contact or
+6. NEVER record anything that belongs to THIS PERSON rather than to the app: contact or
    people names, message text, balances, prices, codes, their search history, their own
    items or counts, or habits you inferred about them. Test: would it still be true on a
    stranger's phone? If not, leave it out — and DELETE an existing memory that contains it.
@@ -220,11 +240,11 @@ RULES
    button text — ARE the structure and must be written, even though they are proper nouns.
    "Tapping '메가선생님' opens the teacher list" is structure.
    "The top chat is '엄마'" is this person's data.
-6. source_turn must be a turn number that appears in the log above.
+7. source_turn must be a turn number that appears in the log above.
    pkg must be a package that appears in the log above.
-   id must be one of the ids listed above.
-7. Keep trigger under 80 characters and consequence under 160.
-8. Every verdict needs a short "why" naming the turn(s) it is based on.
+   id and sameAs must be ids listed above.
+8. Keep trigger under 80 characters and consequence under 160.
+9. Every verdict needs a short "why".
 """.trim()
     }
 
@@ -235,6 +255,8 @@ RULES
     private data class Verdict(
         val verdict: String,
         val id: Long?,
+        /** `DUPLICATE` 에서 **남길** 쪽. 접히는 쪽은 [id] 다. */
+        val sameAs: Long?,
         val candidate: Candidate?,
         val why: String,
     )
@@ -265,6 +287,7 @@ RULES
                     verdict = kind,
                     // 0 은 "없음" 과 구분이 안 된다(id 는 1부터). null 로 떨어뜨려 위에서 걸리게.
                     id = o.optLong("id", 0L).takeIf { it > 0L },
+                    sameAs = o.optLong("sameAs", 0L).takeIf { it > 0L },
                     candidate = if (!hasCand) null else Candidate(
                         kind = o.optString("kind"),
                         trigger = o.optString("trigger"),

@@ -223,6 +223,26 @@ class MemoryGateway(private val dao: MemoryDao) {
         return newId
     }
 
+    /**
+     * `DUPLICATE` — **기존 기억 둘이 같은 말**일 때 하나를 접는다. [dupId] 를 은퇴시키고
+     * `supersededBy` 로 [keepId] 를 가리킨다.
+     *
+     * `UPDATE` 와 메커니즘이 같고 **새 행을 안 만드는 것**만 다르다 — 대체할 문장이
+     * 새로 오는 게 아니라 **이미 목록에 있다.**
+     *
+     * ⚠️ **점수를 합치지 않는다.** 남는 쪽 값을 그대로 둔다. 합치면 근거 없이 부풀고,
+     * 상한 4 가 있는 이유(매일 쓰는 앱의 기억이 무한정 커지지 않게)와도 어긋난다.
+     */
+    fun mergeInto(dupId: Long, keepId: Long): Boolean {
+        if (dupId == keepId) return false
+        val all = dao.allMemories()
+        val dup = all.firstOrNull { it.id == dupId } ?: return false
+        if (all.none { it.id == keepId }) return false   // 남길 쪽이 실재해야 한다
+        if (dup.pinned) return false                     // 사람이 쓴 것은 모델이 안 접는다
+        dao.supersede(dupId, keepId, System.currentTimeMillis())
+        return true
+    }
+
     /** 목록 UI·측정용. `memoryId → (실행 수, 주입 횟수, 성공 수)`. */
     fun recallStats(): Map<Long, RecallStat> = dao.recallStats().associateBy { it.memoryId }
 
