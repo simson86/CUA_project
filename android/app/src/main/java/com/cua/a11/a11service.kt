@@ -396,8 +396,10 @@ class a11service : AccessibilityService(), Executor {
     //   - 관련 없는 작업에서 읽어도 해가 없는 문장이면 기억이 아니라 system_prompt 감이다.
     //  예산·민감도 필터는 전부 MemoryGateway 안에 있다 — 여기서 다시 걸지 말 것.
 
+    // 버전을 같이 넘긴다 — 랭킹의 `version_match` 항(Unit 7)이 쓴다. 이미 foregroundApp()
+    // 이 같은 값을 만들고 있으므로 그걸 재사용한다.
     override fun appNote(): String? =
-        rootInActiveWindow?.packageName?.toString()?.let { gateway.readForApp(it) }
+        foregroundApp()?.let { gateway.readForApp(it.pkg, it.versionCode) }
 
     override fun taskNote(task: String): String? = gateway.readForTask(task)
 

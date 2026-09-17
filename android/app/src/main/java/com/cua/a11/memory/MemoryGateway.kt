@@ -18,6 +18,9 @@ class MemoryGateway(private val dao: MemoryDao) {
         private const val APP_FACT_LINES = 2
         private const val PITFALL_LINES = 2
 
+        /** 열린 결정 N2 — 근거 없는 값이다. `pkgVersion` 변경 간격에서 역산하기로 돼 있다. */
+        private const val RECENCY_HALFLIFE_DAYS = 30.0
+
         /** 우리 앱 자신. 에이전트가 *조작하는* 앱이 아니라 *실행이 시작된 곳*이라 앱 지식이 될 수 없다. */
         const val OWN_PACKAGE = "com.cua.a11"
 
@@ -79,14 +82,70 @@ class MemoryGateway(private val dao: MemoryDao) {
         }
     }
 
-    /** 지금 떠 있는 앱에 대한 참고사항. 없으면 null — 그때 요청 본문은 종전과 동일하다. */
-    fun readForApp(pkg: String): String? = guard {
+    /**
+     * 지금 떠 있는 앱에 대한 참고사항. 없으면 null — 그때 요청 본문은 종전과 동일하다.
+     *
+     * [pkgVersion] 은 `version_match` 항에만 쓴다(없으면 그 항이 1.0 이 된다).
+     */
+    fun readForApp(pkg: String, pkgVersion: Long? = null): String? = guard {
         if (pkg == OWN_PACKAGE) return@guard null
         val now = System.currentTimeMillis()
         val hits = dao.activeAppFacts(now)
             .filter { appliesTo(it, pkg) }
+            .sortedByDescending { rank(it, pkgVersion, now) }
             .take(APP_FACT_LINES)
         emit(hits, now)
+    }
+
+    // ── 랭킹 (Unit 7, 설계 §5 ③단계) ────────────────────────────────────
+    /**
+     * 예산 안에 무엇을 넣을지 정하는 점수. **명세 §5 의 네 항을 그대로** 쓴다.
+     *
+     * ```
+     * 0.40·relevance + 0.25·confidence + 0.15·recency + 0.20·version_match
+     * ```
+     *
+     * ⚠️ **가중치 넷은 근거가 없다.** 명세가 직접 그렇게 적어 뒀다 — *"이 숫자들은
+     * 시작값이지 정답이 아니다 … 그 전까지는 **'이런 항들을 본다'는 구조만** 확정된 것으로
+     * 읽어야 한다."* (열린 결정 N1). **지금은 튜닝할 재료가 없다** — 후보가 예산(2줄)보다
+     * 많아야 정렬이 의미를 갖는데, 기억이 그만큼 안 쌓였다.
+     *
+     * **고친 것은 그 전의 정렬이다.** 종전에는 `ORDER BY numRecalled DESC` 였는데 명세의
+     * 표현으로 **인기투표**다 — 매일 여는 앱의 기억이 관련도·신뢰도와 무관하게 항상 이기고,
+     * `numRecalled` 는 **주입된 횟수**라 *"50번 실패한 실행에 매번 들어간 기억도 50"* 이 된다.
+     * 점수식이 아직 근거가 없어도 **그건 명백히 틀렸다.**
+     */
+    private fun rank(m: MemoryEntity, pkgVersion: Long?, now: Long): Double {
+        // relevance — 얼마나 이 상황의 것인가.
+        //  명세는 PITFALL 에 정규화된 bm25 를 쓰지만 우리는 FTS5 가 없고 코틀린 문자열
+        //  매칭이라 **걸렸다/아니다** 뿐이다. 걸린 것만 여기 오므로 1.0.
+        //  scope='system' 은 명세의 `vendor` 자리다 — 앱을 가리지 않는 만큼 덜 구체적이라
+        //  같은 0.7 을 준다(명세에 `system` 항은 없다. 대입한 것임을 밝혀 둔다).
+        val relevance = when {
+            m.kind == "PITFALL" -> 1.0
+            m.scope == "system" -> 0.7
+            else -> 1.0
+        }
+        // confidence — 얼마나 믿을 만한가. score 0~4 를 0~1 로.
+        //  ⚠️ 명세는 여기에 **⑦의 시간 감쇠를 곱하라**고 한다. 그 감쇠가 Unit 8 이라
+        //  지금은 **빠져 있다.** 자리만 비워 둔 것이다.
+        val confidence = m.score.coerceIn(0, 4) / 4.0
+        // recency — 최근에 쓰였나. 한 번도 안 걸렸으면 추가된 시각을 쓴다.
+        //  반감기 30일은 **근거 없는 값**이다(열린 결정 N2 — pkgVersion 변경 간격에서
+        //  역산하기로 돼 있는데 아직 데이터가 없다).
+        val last = m.lastAccessed ?: m.timeAdded
+        val days = (now - last).coerceAtLeast(0L) / 86_400_000.0
+        val recency = Math.exp(-Math.log(2.0) * days / RECENCY_HALFLIFE_DAYS)
+        // version_match — **네 항 중 유일하게 결정론적**이다. 나머지 셋은 추정값이지만
+        //  longVersionCode 는 사실이다. 명세가 0.20 을 준 이유다.
+        //  양쪽 중 하나라도 모르면 1.0 — 벌점을 줄 근거가 없다(사람이 UI 로 넣은 기억은
+        //  pkgVersion 이 null 이다).
+        val versionMatch = when {
+            m.pkgVersion == null || pkgVersion == null -> 1.0
+            m.pkgVersion == pkgVersion -> 1.0
+            else -> 0.4
+        }
+        return 0.40 * relevance + 0.25 * confidence + 0.15 * recency + 0.20 * versionMatch
     }
 
     /**
@@ -113,6 +172,7 @@ class MemoryGateway(private val dao: MemoryDao) {
         val hits = dao.activePitfalls(now)
             .filter { m -> m.keywords?.split(',')
                 ?.any { k -> k.trim().takeIf { it.isNotEmpty() }?.let { g.contains(it.lowercase()) } == true } == true }
+            .sortedByDescending { rank(it, null, now) }   // PITFALL 은 앱에 안 묶인다
             .take(PITFALL_LINES)
         emit(hits, now)
     }
@@ -291,10 +351,10 @@ class MemoryGateway(private val dao: MemoryDao) {
             // 조건을 재현하려면 여기서도 지정할 수 있어야 한다(기본은 false — 자동 강등
             // 경로를 타는 쪽이 bench 의 기본값이어야 측정이 실제 동작을 본다).
             pinned = json.optBoolean("pinned", false),
+            // 랭킹(Unit 7)을 시험하려면 점수가 다른 후보를 여럿 세울 수 있어야 한다.
+            // 실행을 여러 번 돌려 점수를 만드는 것으로는 몇 분이 걸린다.
+            score = json.optInt("score", HUMAN_SCORE),
             source = "bench",
-            // bench 는 사람이 쓴 문장을 대신 넣는 경로다 — 측정의 처치(處置)이므로
-            // 사람이 넣은 것과 같은 무게로 시작해야 한다(위 HUMAN_SCORE 주석).
-            score = HUMAN_SCORE,
             timeAdded = System.currentTimeMillis(),
         )
     )

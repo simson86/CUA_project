@@ -78,7 +78,10 @@ interface MemoryDao {
         "WHERE kind = 'APP_FACT' " +
         "  AND state = 'ACTIVE' AND invalidAt IS NULL AND sensitivity = 'normal' " +
         "  AND (expiresAt IS NULL OR expiresAt > :now) " +
-        "ORDER BY numRecalled DESC, id"
+        // ★ 정렬은 **코틀린에서** 한다(MemoryGateway.rank, Unit 7). SQL 로 못 하는 항이
+        //   있어서다 — version_match 는 '지금 떠 있는 앱의 버전' 을 알아야 하고, recency 는
+        //   지수 감쇠다. id 순은 점수가 같을 때의 **결정론적 동점 처리**일 뿐이다.
+        "ORDER BY id"
     )
     fun activeAppFacts(now: Long): List<MemoryEntity>
 
@@ -92,7 +95,7 @@ interface MemoryDao {
         "WHERE kind = 'PITFALL' " +
         "  AND state = 'ACTIVE' AND invalidAt IS NULL AND sensitivity = 'normal' " +
         "  AND (expiresAt IS NULL OR expiresAt > :now) " +
-        "ORDER BY numRecalled DESC, id"
+        "ORDER BY id"   // 정렬은 MemoryGateway.rank (위 주석)
     )
     fun activePitfalls(now: Long): List<MemoryEntity>
 
