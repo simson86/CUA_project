@@ -12,6 +12,14 @@ import android.util.Log
  */
 class MemoryGateway(private val dao: MemoryDao) {
 
+    /**
+     * 주입을 끌 수 있다(판단 ② 의 대조군 A). `a11service` 가 실행 직전에 prefs 에서 읽어
+     * 넣는다 — 게이트웨이가 `Context` 를 들고 있지 않기 때문이다.
+     *
+     * ⚠️ `false` 여도 **기억은 그대로 쌓인다.** 읽기만 멈춘다.
+     */
+    @Volatile var injectEnabled: Boolean = true
+
     companion object {
         // 주입 예산(설계 원칙 4). **최적화가 아니라 알고리즘의 일부다** — 기억이 쌓일수록
         // 모델의 주의가 화면에서 텍스트로 옮겨간다. 코드로 강제해야 하는 이유다.
@@ -113,6 +121,29 @@ class MemoryGateway(private val dao: MemoryDao) {
             ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_REFLECTOR, on).apply()
         }
+
+        // ── 주입 스위치 (판단 ② 측정용) ─────────────────────────
+        //  왜 필요한가 — 종단 측정의 **대조군(A)** 은 *"기억을 주입하지 않은 실행"* 이다.
+        //  그런데 기억을 **지우면 안 된다**: B 의 누적이 사라지기 때문이다. 그래서 쌓인
+        //  기억은 그대로 두고 **읽기만 끈다.**
+        //
+        //  ⚠️ 리플렉터는 이 스위치와 무관하게 돈다. A 실행도 기억을 **만든다** —
+        //  실제 사용에서는 모든 실행이 그렇고, A 는 *"기억 없이 했을 때의 성능"* 을 재는
+        //  것이지 *"기억을 안 만드는 조건"* 이 아니다.
+        //
+        //  ⚠️ **prefs 에 저장한다.** 휘발성으로 두면 배치 도중 앱이 재시작될 때 조용히
+        //  켜지고, 그러면 **A 실행이 B 가 되어 측정이 오염된다.** 그런 오염은 로그를
+        //  봐도 안 보인다.
+        private const val KEY_INJECT = "inject_enabled"
+
+        fun injectEnabled(ctx: android.content.Context): Boolean =
+            ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .getBoolean(KEY_INJECT, true)     // 기본은 켜짐 — 제품의 정상 동작
+
+        fun setInjectEnabled(ctx: android.content.Context, on: Boolean) {
+            ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_INJECT, on).apply()
+        }
     }
 
     /**
@@ -121,6 +152,7 @@ class MemoryGateway(private val dao: MemoryDao) {
      * [pkgVersion] 은 `version_match` 항에만 쓴다(없으면 그 항이 1.0 이 된다).
      */
     fun readForApp(pkg: String, pkgVersion: Long? = null): String? = guard {
+        if (!injectEnabled) return@guard null
         if (pkg == OWN_PACKAGE) return@guard null
         val now = System.currentTimeMillis()
         val hits = dao.activeAppFacts(now)
@@ -200,6 +232,7 @@ class MemoryGateway(private val dao: MemoryDao) {
      * **동의어를 함께** 넣어야 하고, 그 생성은 Unit 5 의 리플렉터 몫이다.
      */
     fun readForTask(goal: String): String? = guard {
+        if (!injectEnabled) return@guard null
         val now = System.currentTimeMillis()
         val g = goal.lowercase()
         val hits = dao.activePitfalls(now)
@@ -335,6 +368,10 @@ class MemoryGateway(private val dao: MemoryDao) {
         dao.supersede(dupId, keepId, System.currentTimeMillis())
         return true
     }
+
+    /** 상태별 기억 수. 판단 ② 의 **축적 곡선**이 이 숫자로 그려진다. */
+    fun stateCounts(): Map<String, Int> =
+        dao.allMemories().groupingBy { it.state }.eachCount()
 
     /** 목록 UI·측정용. `memoryId → (실행 수, 주입 횟수, 성공 수)`. */
     fun recallStats(): Map<Long, RecallStat> = dao.recallStats().associateBy { it.memoryId }

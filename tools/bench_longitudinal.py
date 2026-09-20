@@ -173,11 +173,28 @@ def show(row):
           f"A{m.get('ACTIVE',0)}/P{m.get('PENDING',0)}/R{m.get('RETIRED',0)}  {mark}")
 
 
-def next_batch():
+def done_rows():
     if not os.path.exists(RESULTS):
-        return 1
-    rows = [json.loads(l) for l in open(RESULTS, encoding="utf-8")]
-    return max((r.get("batch", 0) for r in rows), default=0) + 1
+        return []
+    return [json.loads(l) for l in open(RESULTS, encoding="utf-8")]
+
+
+def next_batch():
+    """다음에 돌릴 배치 번호와 **이미 끝난 (과제, 조건)** 쌍.
+
+    ★ 배치가 중간에 죽으면 **이어서** 돌려야 한다. 새 배치로 넘어가면 앞 배치가
+      A 4건 / B 3건 처럼 짝이 안 맞은 채 남아 배치 평균이 거짓말을 한다. 그렇다고
+      지우고 다시 돌릴 수도 없다 — **기억은 이미 쌓였고 되돌릴 방법이 없다.**
+      (실측: 배치 1 은 하네스 KeyError 로, 배치 2 는 adb 데몬 사망으로 죽었다.)
+    """
+    rows = done_rows()
+    if not rows:
+        return 1, set()
+    b = max(r.get("batch", 0) for r in rows)
+    cur = {(r["task"], r["cond"]) for r in rows if r.get("batch") == b}
+    if len(cur) < len(TASKS) * 2:
+        return b, cur              # 미완 배치를 이어서
+    return b + 1, set()
 
 
 # ── 모드 ─────────────────────────────────────────────────────────────
@@ -202,15 +219,21 @@ def cmd_explore():
 
 
 def cmd_batch():
-    b = next_batch()
+    b, already = next_batch()
     # 배치마다 A/B 순서를 뒤집는다 — 항상 A→B 면 B 가 데워진 앱을 물려받는다.
     order = ("A", "B") if b % 2 == 1 else ("B", "A")
+    left = len(TASKS) * 2 - len(already)
     print(f"배치 {b} — {len(TASKS)}과제 × {order} = {len(TASKS)*2}회  "
-          f"({MODEL}/{THINKING})\n")
+          f"({MODEL}/{THINKING})")
+    if already:
+        print(f"  ↻ 이어서 — {len(already)}회는 이미 끝났다, {left}회 남음")
+    print()
     reflector(True)
     t0 = time.time()
     for t in TASKS:
         for cond in order:
+            if (t["id"], cond) in already:
+                continue
             row = run_one(t, cond, b)
             append(row)
             show(row)
@@ -275,10 +298,16 @@ def cmd_report():
         # ★ 채점되는 과제는 **정답률을 같이 본다.** 턴이 줄었는데 정답률이 안 올랐으면
         #   "더 빨리 틀리기를 배웠다" 이지 "도움이 됐다" 가 아니다.
         if t.get("expect"):
+            # ★ **집계 시점에 다시 채점한다.** 저장된 `correct` 를 믿으면 안 된다 —
+            #   `expect` 를 나중에 단 과제는 그 전 배치의 행에 필드가 없어 통째로
+            #   오답으로 세어진다(실측: L1·L2 의 배치 1 행이 정답인데 X 로 찍혔다).
+            #   원문 reply 가 남아 있으므로 규칙이 바뀌어도 과거 행까지 일관되게 읽힌다.
+            def graded(r):
+                return any(e in (r.get("reply") or "") for e in t["expect"])
             ca = [r for r in ok if r["task"] == t["id"] and r["cond"] == "A"]
             cv = [r for r in ok if r["task"] == t["id"] and r["cond"] == "B"]
-            na = sum(1 for r in ca if r.get("correct"))
-            nv = sum(1 for r in cv if r.get("correct"))
+            na = sum(1 for r in ca if graded(r))
+            nv = sum(1 for r in cv if graded(r))
             print(f"       정답 A {na}/{len(ca)}  B {nv}/{len(cv)}"
                   f"   ← 턴이 줄어도 이게 안 오르면 개선이 아니다")
         print(f"       A {a}\n       B {v}")

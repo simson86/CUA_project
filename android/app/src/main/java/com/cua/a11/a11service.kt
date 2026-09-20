@@ -182,6 +182,7 @@ class a11service : AccessibilityService(), Executor {
         cancelled = false
         skipBlackPkgs.clear()      // "그냥 계속" 판단은 이번 실행에만 유효하다
         attended = true            // 앱에서 눌렀으니 사람이 보고 있다
+        gateway.injectEnabled = com.cua.a11.memory.MemoryGateway.injectEnabled(this)
         // 이번 판에 쓸 설정을 갈아끼운다. 따로 대입하지 말 것 — 사고수준이 이 모델에서
         // 유효한지는 '조합'을 봐야 알 수 있고(3.7·3.8 은 minimal 을 400 으로 거절한다),
         // 그 판단은 configure 안에 한 번만 둔다.
@@ -1032,6 +1033,23 @@ class a11service : AccessibilityService(), Executor {
                             "OK ${gateway.addFromJson(org.json.JSONObject(body))}"
                         }
                         "MEMCOUNT"  -> bench(client) { "OK ${gateway.count()}" }
+                        // 판단 ② 대조군 — 기억은 두고 **읽기만** 끈다.
+                        "MEMINJECT" -> bench(client) {
+                            val on = line.trim().substringAfter(" ").trim() == "on"
+                            com.cua.a11.memory.MemoryGateway.setInjectEnabled(this@a11service, on)
+                            "OK ${if (on) "on" else "off"}"
+                        }
+                        // 리플렉터 켜고 끄기 — 측정 하네스가 제어해야 한다. 체크박스를
+                        // 손으로 누르게 하면 배치를 자동으로 못 돌린다.
+                        "REFLECTOR" -> bench(client) {
+                            val on = line.trim().substringAfter(" ").trim() == "on"
+                            com.cua.a11.memory.MemoryGateway.setReflectorEnabled(this@a11service, on)
+                            "OK ${if (on) "on" else "off"}"
+                        }
+                        // 상태별 기억 수 — 축적 곡선용.
+                        "MEMSTATS"  -> bench(client) {
+                            org.json.JSONObject(gateway.stateCounts() as Map<*, *>).toString()
+                        }
                         // 용량 상한 시험용 — 500 을 채울 수는 없으니 문턱을 한 번만 바꿔 돌린다.
                         // 상수(ACTIVE_CAP)는 안 바뀐다. 돌려주는 값은 내린 건수.
                         //   쓰는 법: MEMCAP <active> <pending>
@@ -1056,6 +1074,9 @@ class a11service : AccessibilityService(), Executor {
                             cancelled = false
                             skipBlackPkgs.clear()
                             attended = false            // 소켓 = 지켜보는 사람이 없는 실행
+                            // 주입 스위치를 이번 실행에 반영한다(판단 ② 대조군).
+                            gateway.injectEnabled =
+                                com.cua.a11.memory.MemoryGateway.injectEnabled(this@a11service)
                             //
                             // ★ cancel 을 넘기지 않으면 기본값이 {false} 라 **중단이 아예 안 된다** —
                             //   앱의 중단 버튼도, 인계 타임아웃이 세우는 requestCancel() 도 무시된다.

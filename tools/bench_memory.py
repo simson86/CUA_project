@@ -122,12 +122,29 @@ def _find_adb():
 ADB = _find_adb()
 
 
-def adb(*args, check=True):
-    r = subprocess.run([ADB, *args], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
-    if check and r.returncode != 0:
-        raise RuntimeError(f"adb {' '.join(args)} 실패: {r.stderr.strip()}")
-    return r.stdout.strip()
+def adb(*args, check=True, _retries=3):
+    """⚠️ **adb 데몬이 배치 도중에 죽는다** — 실측 2026-09-21, 판단 ② 배치 2 가 8회째에서
+    `no devices/emulators found` 로 통째로 죽었다(데몬이 재시작된 직후였다). 이 파일
+    머리말이 말하는 그 불안정성이고, 에이전트 실행은 Wi-Fi 소켓이라 멀쩡한데
+    `reset()` 의 force-stop 하나 때문에 배치가 날아간다.
+
+    그래서 **짧게 재시도한다.** 기기가 정말 없으면 세 번 다 실패해 종전처럼 던진다 —
+    조용히 넘어가면 앱을 안 죽인 채로 측정이 이어져 '설정이 이미 열려 있어 0턴' 같은
+    실행이 섞인다(reset 주석 참조)."""
+    last = None
+    for i in range(_retries):
+        r = subprocess.run([ADB, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        if r.returncode == 0:
+            return r.stdout.strip()
+        last = r
+        if not check:
+            return r.stdout.strip()
+        if i < _retries - 1:
+            # 데몬이 막 재시작했으면 기기가 붙기까지 잠깐 걸린다.
+            subprocess.run([ADB, "wait-for-device"], capture_output=True, timeout=30)
+            time.sleep(2)
+    raise RuntimeError(f"adb {' '.join(args)} 실패({_retries}회): {last.stderr.strip()}")
 
 
 _ip_cache = [None]
