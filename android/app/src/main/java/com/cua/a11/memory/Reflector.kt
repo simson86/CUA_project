@@ -171,6 +171,20 @@ class Reflector(
      * 측정은 턴 수만 쟀지 정확도를 잰 적이 없어서**(MEMORY.md 의 열린 질문) 그 공백이
      * 수치로는 안 보였다.
      */
+    /**
+     * ⚠️ **`keywords` 는 목표 문장의 언어로 써야 한다** — 실측으로 드러난 함정(2026-09-21).
+     *
+     * 판단 ② 배치 1 에서 리플렉터가 만든 첫 `PITFALL` 의 키워드가
+     * `search bar, enter key, icon, click` 이었다. 매칭은
+     * `goal.lowercase().contains(keyword)` 인데 우리 목표는 한국어다 —
+     * **영원히 안 걸린다.** 저장은 되고 승격 경로도 없어(주입이 안 되니 NOOP 대상도 아니다)
+     * `PITFALL` 이라는 범주가 통째로 죽어 있었다.
+     *
+     * 원인은 모델이 아니라 프롬프트였다 — **매칭 방식을 설명한 적이 없다.** `text` 는
+     * 영문 권장이라 모델이 `keywords` 도 같은 언어로 맞춘 것이 오히려 자연스럽다.
+     * 규칙 7 이 그 설명이다(예시까지 넣은 이유: 규칙만으로는 `text` 의 영문 관례와
+     * 충돌하는 것처럼 보인다).
+     */
     private fun prompt(run: RunEntity, eps: List<EpisodeEntity>, existing: List<MemoryEntity>): String {
         val log = eps.joinToString("\n") { e ->
             "turn ${e.turn} | ${e.pkg ?: "?"} | ${e.action ?: "?"} | ${e.intent ?: ""}" +
@@ -196,7 +210,8 @@ $existingText
 
 Return JSON: {"verdicts": [ ... ]}, zero or more of:
   {"verdict":"ADD",    "kind":"APP_FACT"|"PITFALL", "trigger":"…", "consequence":"…",
-                       "pkg":"…", "keywords":"…", "source_turn":N, "why":"…"}
+                       "pkg":"…", "keywords":"… (PITFALL only — in the GOAL's language, see rule 7)",
+                       "source_turn":N, "why":"…"}
   {"verdict":"NOOP",   "id":N, "why":"…"}     // this run showed the same thing again
   {"verdict":"DELETE", "id":N, "why":"…"}     // this run contradicted it
   {"verdict":"UPDATE", "id":N, "kind":…, "trigger":…, "consequence":…, "pkg":…,
@@ -240,11 +255,20 @@ RULES
    button text — ARE the structure and must be written, even though they are proper nouns.
    "Tapping '메가선생님' opens the teacher list" is structure.
    "The top chat is '엄마'" is this person's data.
-7. source_turn must be a turn number that appears in the log above.
+7. PITFALL keywords decide whether the note is ever shown. They are matched as LITERAL
+   SUBSTRINGS against the user's goal sentence, which is written in THEIR OWN language
+   (see GOAL above). Write the keywords in THAT SAME language, choosing words that would
+   actually appear in a request like it, comma-separated, with synonyms.
+   For GOAL "메가스터디에서 민동휘 강사의 가장 최신 수강평이 뭔지 알려줘":
+     keywords "수강평,강사,최신순,정렬"   -> matches, the note gets shown
+     keywords "course reviews,sorting"    -> NEVER matches, the note is dead weight
+   English keywords cannot match a Korean goal. If you cannot name words that would
+   appear in such a goal, make it an APP_FACT keyed by pkg instead.
+8. source_turn must be a turn number that appears in the log above.
    pkg must be a package that appears in the log above.
    id and sameAs must be ids listed above.
-8. Keep trigger under 80 characters and consequence under 160.
-9. Every verdict needs a short "why".
+9. Keep trigger under 80 characters and consequence under 160.
+10. Every verdict needs a short "why".
 """.trim()
     }
 

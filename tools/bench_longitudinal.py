@@ -97,10 +97,17 @@ TASKS = [
      "expect": ["다 좋은데요", "2026-09-18", "2026년 9월 18일"]},
     {"id": "M3", "pkg": MEGA, "personal": True,
      "goal": "메가스터디에서 내 목표 대학 3지망이 뭔지 알려줘"},
+    # L1·L2 도 채점한다. 배치 1 에서 A 와 B 가 **독립적으로 같은 답**을 냈고(A/B 각 1회),
+    # 시대별 차트는 앱이 가진 고정 데이터라 변하지 않는다. 원문 reply 가 파일에 남으므로
+    # 전제가 틀렸다면 사후 재채점이 된다.
+    #   ⚠️ M1 은 안 붙였다 — 커리큘럼 답변에 실행마다 다른 문구가 나와("천일문 추천 가이드",
+    #      "구문 및 수능 영어 근본 완성") 고정 토큰을 고를 수 없다.
     {"id": "L1", "pkg": MELON, "personal": False,
-     "goal": "멜론에서 1976년에 가장 인기있던 노래가 뭐야"},
+     "goal": "멜론에서 1976년에 가장 인기있던 노래가 뭐야",
+     "expect": ["고목나무"]},
     {"id": "L2", "pkg": MELON, "personal": False,
-     "goal": "멜론에서 1990년대 차트 1위가 뭐야"},
+     "goal": "멜론에서 1990년대 차트 1위가 뭐야",
+     "expect": ["내사랑 내곁에", "내 사랑 내 곁에"]},
     {"id": "L3", "pkg": MELON, "personal": True,
      "goal": "멜론에서 내가 하이라이트한 가사 중 가장 최근 것 보여줘"},
 ]
@@ -246,7 +253,7 @@ def cmd_report():
     #  전체 평균만 내면 안 된다. 2차 측정의 교훈이 정확히 이거였다 — 세 과제 중 하나만
     #  −48.8% 이고 둘은 0% 였는데, 합쳐 놓으니 "약간 도움이 된다"로 뭉개졌다. 게다가
     #  여기서는 M2 의 분산이 8~20 이라(탐색 실측) 한 과제가 배치 평균을 ±2턴 흔든다.
-    print(f"\n{'과제':>4} {'A':>7} {'B':>7} {'B-A':>8} {'%':>7}   A완주  B완주")
+    print(f"\n{'과제':>4} {'A':>7} {'B':>7} {'B-A':>8} {'%':>7}   A완주  B완주   B주입")
     for t in TASKS:
         a = [r["turns"] for r in ok if r["task"] == t["id"] and r["cond"] == "A"]
         v = [r["turns"] for r in ok if r["task"] == t["id"] and r["cond"] == "B"]
@@ -257,8 +264,14 @@ def cmd_report():
                  and r["outcome"] == "success")
         dv = sum(1 for r in ok if r["task"] == t["id"] and r["cond"] == "B"
                  and r["outcome"] == "success")
+        # ★ B 의 주입 턴 수(note)를 같이 찍는다. **0 이면 그 B 는 조건 이름만 B 이고
+        #   실제로는 A 와 같은 조건이다** — 그 앱의 ACTIVE 기억이 아직 없었다는 뜻이다.
+        #   배치 1 의 M1(-30%)·L1(+58%)이 둘 다 그랬다. 이 열이 없으면 분산을 효과로 읽는다.
+        bn = [r.get("notes", 0) for r in ok if r["task"] == t["id"] and r["cond"] == "B"]
+        nz = sum(1 for x in bn if x == 0)
         print(f"{t['id']:>4} {ma:>7.1f} {mv:>7.1f} {mv-ma:>+8.1f} "
-              f"{(mv-ma)/ma*100:>+6.1f}%   {da}/{len(a):<4} {dv}/{len(v)}")
+              f"{(mv-ma)/ma*100:>+6.1f}%   {da}/{len(a):<4} {dv}/{len(v):<5} "
+              f"{sum(bn)/len(bn):>4.1f}" + (f"  ⚠주입0이 {nz}회" if nz else ""))
         # ★ 채점되는 과제는 **정답률을 같이 본다.** 턴이 줄었는데 정답률이 안 올랐으면
         #   "더 빨리 틀리기를 배웠다" 이지 "도움이 됐다" 가 아니다.
         if t.get("expect"):
