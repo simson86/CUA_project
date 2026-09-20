@@ -21,6 +21,39 @@ class MemoryGateway(private val dao: MemoryDao) {
         /** 열린 결정 N2 — 근거 없는 값이다. `pkgVersion` 변경 간격에서 역산하기로 돼 있다. */
         private const val RECENCY_HALFLIFE_DAYS = 30.0
 
+        /**
+         * **`ACTIVE` 상한** (열린 결정 N3 — 500 은 명세값이고 근거 없다).
+         *
+         * ⚠️ **명세는 "memory 총 500건" 인데 여기서는 `ACTIVE` 만 센다.** 명세의 상한은
+         * 초과분을 `PENDING` 으로 **강등**하는데(삭제 아님), 강등은 행 수를 안 줄인다. 그래서
+         * 총 행 수를 세면 강등을 아무리 해도 500 밑으로 못 내려간다 — 명세에서 그 문제를
+         * 푸는 것은 `PENDING` 90일 삭제(보존 정책)인데, **이 프로젝트는 보존 정책을 뺐다**
+         * (한 달짜리라 90일 규칙이 발동하지 않는다). 그러면 **`ACTIVE` 를 세는 것만이 강등으로
+         * 실제로 해소되는 상한**이다. 그리고 모델에 실리고 예산을 다투는 것도 `ACTIVE` 다.
+         */
+        const val ACTIVE_CAP = 500
+
+        /**
+         * **`PENDING` 상한** — 근거 없는 값이다(N3 와 같은 처지). 다만 유도 과정은 남긴다.
+         *
+         * ★ **실제로 차는 건 이쪽이다.** 리플렉터가 만드는 건 전부 `PENDING` 이고, 나가는
+         * 문은 **승격(재관측)뿐**이다. 한 번만 쓰는 앱의 후보는 재관측될 일이 없어 영원히
+         * 남는다. 반면 `ACTIVE` 는 승격된 것만 들어오고 실패 강등·`DELETE`·`DUPLICATE`·
+         * 상한까지 나가는 문이 넷이다. **`ACTIVE 500` 은 이 프로젝트에서 사실상 장식이고,
+         * 진짜 작동하는 상한은 이것이다.**
+         *
+         * 조이는 게 더 중요한 이유도 있다 — **reconciliation 프롬프트에 `PENDING` 도 전부
+         * 실린다**(`reconcileSet` 은 `RETIRED` 만 뺀다). 검증 안 된 후보가 프롬프트 비용을
+         * 직접 만든다. 200 이면 앱 10개 기준 한 앱당 ~20건, ~400 토큰이라 감당된다.
+         *
+         * ⚠️ **명세의 규칙은 시간이었다** — *"`PENDING` 90일 무변동 삭제"*. 한 달짜리
+         * 프로젝트에서는 발동하지 않아 뺐고, 건수로 대신한다. **둘은 목적이 다르다**
+         * (시간=신선도, 건수=자원). 다만 **고르는 순서는 같다** — `PENDING` 은 점수가 거의
+         * 다 1이라 `rank()` 가 사실상 `recency` 순이고, 그래서 **가장 오래되고 한 번도 안
+         * 걸린 것부터** 지운다. 갓 만든 후보는 `recency` 가 높아 자동으로 보호된다.
+         */
+        const val PENDING_CAP = 200
+
         /** 우리 앱 자신. 에이전트가 *조작하는* 앱이 아니라 *실행이 시작된 곳*이라 앱 지식이 될 수 없다. */
         const val OWN_PACKAGE = "com.cua.a11"
 
@@ -261,7 +294,7 @@ class MemoryGateway(private val dao: MemoryDao) {
     fun noop(id: Long) {
         val ids = listOf(id)
         dao.raiseScore(ids)
-        dao.activateProven(ids)
+        if (dao.activateProven(ids) > 0) enforceCap()   // 검역이 풀려 ACTIVE 가 늘었다
     }
 
     /** `DELETE` — 즉시 은퇴. 돌려주는 값이 false 면 `pinned` 라 건너뛴 것이다. */
@@ -317,7 +350,61 @@ class MemoryGateway(private val dao: MemoryDao) {
     /** id == 0 이면 새로 넣고, 아니면 덮어쓴다. 돌려주는 값은 그 행의 id. */
     fun save(m: MemoryEntity): Long {
         validate(m)?.let { throw IllegalArgumentException(it) }
-        return if (m.id == 0L) dao.insertMemory(m) else { dao.updateMemory(m); m.id }
+        val id = if (m.id == 0L) dao.insertMemory(m) else { dao.updateMemory(m); m.id }
+        // 새로 넣은 것만 상한을 건드린다. 편집(id != 0)은 개수를 안 바꾼다.
+        if (m.id == 0L) enforceCap()
+        return id
+    }
+
+    // ── 용량 상한 (Unit 8) ──────────────────────────────────────────────
+    /**
+     * `ACTIVE` 가 [cap] 을 넘으면 **랭킹 최하위부터** `PENDING` 으로 내린다. 내린 수를 돌려준다.
+     *
+     * `ACTIVE` 가 늘어나는 자리 둘에서 부른다 — `save()`(사람·측정이 `ACTIVE` 로 넣을 때)와
+     * `noop()`(검역이 풀릴 때). 리플렉터의 `ADD` 는 `PENDING` 이라 해당 없다.
+     *
+     * "최하위" 는 **랭킹과 같은 점수식**으로 고른다(`rank`). 앱 버전은 모르므로 `null` 을
+     * 넘긴다 — `version_match` 가 모두에게 1.0 이 되어 순위에 영향이 없다.
+     *
+     * [cap] 을 인자로 받는 이유는 **시험** 때문이다(소켓 `MEMCAP`). 500 을 채워서 시험할
+     * 수는 없다. 상수를 바꾸는 게 아니라 **한 번만** 다른 문턱으로 돌리는 것이다.
+     *
+     * ⚠️ `pinned` 만 남아 여전히 넘치면 **그대로 둔다** — 사람이 고정한 것을 상한으로
+     * 내리지 않는 게 원칙이고, 그 상황은 사람이 목록에서 푸는 것이 맞다.
+     */
+    fun enforceCap(active: Int = ACTIVE_CAP, pending: Int = PENDING_CAP): Int {
+        val now = System.currentTimeMillis()
+        var moved = 0
+
+        // ── ACTIVE 초과 → PENDING 으로 강등 (삭제 아님, 명세 그대로) ──
+        val overActive = dao.activeCount() - active
+        if (overActive > 0) {
+            val victims = dao.activeUnpinned().sortedBy { rank(it, null, now) }.take(overActive)
+            if (victims.isEmpty()) {
+                Log.w("a11mem", "ACTIVE 상한 ${overActive}건 초과인데 전부 pinned 라 내릴 게 없다")
+            } else {
+                moved += dao.demoteToPending(victims.map { it.id })
+                Log.i("a11mem", "ACTIVE 상한 $active 초과 → ${victims.map { it.id }} 를 PENDING 으로")
+            }
+        }
+
+        // ── PENDING 초과 → 삭제 ──
+        //  ★ 강등한 것이 여기 더해지므로 **ACTIVE 처리 뒤에** 센다.
+        //  삭제인 이유: PENDING 은 주입이 안 되므로 memory_recall 참조가 없어 고아 행이
+        //  안 생기고, RETIRED 로 남기면 "틀린 것" 과 "확인 못 받은 것" 이 목록에서 섞인다.
+        //  그리고 재관측이 가능하므로 버리는 비용이 거의 0이다(§3 과 같은 논리).
+        val overPending = dao.pendingCount() - pending
+        if (overPending > 0) {
+            val victims = dao.pendingDeletable().sortedBy { rank(it, null, now) }.take(overPending)
+            if (victims.isEmpty()) {
+                Log.w("a11mem", "PENDING 상한 ${overPending}건 초과인데 지울 수 있는 게 없다")
+            } else {
+                val n = dao.deleteMemories(victims.map { it.id })
+                moved += n
+                Log.i("a11mem", "PENDING 상한 $pending 초과 → ${victims.map { it.id }} 삭제")
+            }
+        }
+        return moved
     }
 
     fun delete(id: Long) = dao.deleteMemory(id)
@@ -354,6 +441,9 @@ class MemoryGateway(private val dao: MemoryDao) {
             // 랭킹(Unit 7)을 시험하려면 점수가 다른 후보를 여럿 세울 수 있어야 한다.
             // 실행을 여러 번 돌려 점수를 만드는 것으로는 몇 분이 걸린다.
             score = json.optInt("score", HUMAN_SCORE),
+            // 버전 태깅(Unit 8)을 시험하려면 '앱이 업데이트된 뒤의 기억' 을 만들 수 있어야
+            // 한다. 진짜 앱 업데이트를 기다릴 수는 없다.
+            pkgVersion = json.optLong("pkgVersion", 0L).takeIf { it > 0L },
             source = "bench",
             timeAdded = System.currentTimeMillis(),
         )

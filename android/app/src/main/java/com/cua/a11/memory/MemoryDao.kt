@@ -195,6 +195,35 @@ interface MemoryDao {
            "WHERE r.runId = :runId ORDER BY m.id")
     fun injectedIn(runId: String): List<MemoryEntity>
 
+    // ── 용량 상한 (Unit 8) ────────────────────────────────
+    @Query("SELECT COUNT(*) FROM memory WHERE state = 'ACTIVE'")
+    fun activeCount(): Int
+
+    /** 강등 후보. `pinned` 는 애초에 빼고 가져온다 — 사람이 고정한 것은 상한으로 안 내린다. */
+    @Query("SELECT * FROM memory WHERE state = 'ACTIVE' AND pinned = 0")
+    fun activeUnpinned(): List<MemoryEntity>
+
+    /** 삭제가 아니라 **검역으로 되돌린다** — 사람이 목록에서 볼 기회를 남긴다(명세 §7). */
+    @Query("UPDATE memory SET state = 'PENDING' WHERE id IN (:ids) AND state = 'ACTIVE'")
+    fun demoteToPending(ids: List<Long>): Int
+
+    @Query("SELECT COUNT(*) FROM memory WHERE state = 'PENDING'")
+    fun pendingCount(): Int
+
+    /**
+     * 버릴 수 있는 검역 후보.
+     *  · `pinned` 제외 — 사람이 고정한 것
+     *  · **`supersededBy` 로 참조되는 행 제외** — `UPDATE` 판정이 만든 새 행이 여기 올 수
+     *    있는데, 지우면 옛 기억이 가리키는 곳이 사라져 **버전 체인이 끊긴다**(명세가
+     *    `RETIRED` 에 대해 *"superseded_by 로 참조되면 유지"* 라고 한 것과 같은 이유).
+     */
+    @Query("SELECT * FROM memory WHERE state = 'PENDING' AND pinned = 0 " +
+           "  AND id NOT IN (SELECT supersededBy FROM memory WHERE supersededBy IS NOT NULL)")
+    fun pendingDeletable(): List<MemoryEntity>
+
+    @Query("DELETE FROM memory WHERE id IN (:ids)")
+    fun deleteMemories(ids: List<Long>): Int
+
     // ── reconciliation (Unit 5c) ──────────────────────────
     /**
      * 대조 대상 후보. **`RETIRED` 는 뺀다** — 부활 경로를 만들면 불안정하고, 같은 사실이

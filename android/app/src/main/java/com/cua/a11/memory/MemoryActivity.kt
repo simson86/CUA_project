@@ -42,6 +42,8 @@ class MemoryActivity : AppCompatActivity() {
     private var rows: List<MemoryEntity> = emptyList()
     /** 기억별 주입 이력(Unit 6). 목록과 함께 한 번에 읽는다. */
     private var stats: Map<Long, RecallStat> = emptyMap()
+    /** 배운 뒤에 앱이 업데이트된 기억의 id (Unit 8 버전 태깅). */
+    private var outdated: Set<Long> = emptySet()
     private lateinit var adapter: RowAdapter
 
     private lateinit var listView: ListView
@@ -93,9 +95,13 @@ class MemoryActivity : AppCompatActivity() {
 
     // ── 데이터 ────────────────────────────────────────────────────────
     /** Room 은 메인 스레드에서 부르면 예외를 던진다 — 읽기도 반드시 백그라운드에서. */
-    private fun reload() = io({ gateway.list() to gateway.recallStats() }) { (loaded, st) ->
+    private fun reload() = io({
+        val loaded = gateway.list()
+        Triple(loaded, gateway.recallStats(), outdatedOf(loaded))
+    }) { (loaded, st, old) ->
         rows = loaded
         stats = st
+        outdated = old
         adapter.notifyDataSetChanged()
         val active = loaded.count { it.state == "ACTIVE" }
         // '한 번도 안 걸린 것'을 요약에 올린다. 그 수가 크면 기억이 없는 게 아니라
@@ -104,6 +110,9 @@ class MemoryActivity : AppCompatActivity() {
         summary.text = buildString {
             append("총 ${loaded.size}건 (ACTIVE ${active}건")
             if (never > 0) append(", 그중 ${never}건은 아직 안 걸림")
+            // 사람이 확인할 거리를 요약줄에 올린다 — 명세의 "확인 필요 N건" 배지 자리다.
+            val stale = loaded.count { it.id in outdated && it.state == "ACTIVE" }
+            if (stale > 0) append(", ${stale}건은 앱이 업데이트됨")
             append(") · 항목을 누르면 고칠 수 있습니다")
         }
         empty.visibility = if (loaded.isEmpty()) View.VISIBLE else View.GONE
@@ -148,6 +157,7 @@ class MemoryActivity : AppCompatActivity() {
             // 주입을 막는 사유는 목록에서 바로 보여야 한다. 안 그러면 사용자는 ACTIVE 인데
             // 왜 안 나오는지 알 길이 없다.
             if (m.invalidAt != null) head.append(" · 무효화됨")
+            if (m.id in outdated) head.append(" · 앱 업데이트됨")
             v.findViewById<TextView>(R.id.rowHead).text = head
 
             v.findViewById<TextView>(R.id.rowText).text = m.text
@@ -177,6 +187,34 @@ class MemoryActivity : AppCompatActivity() {
             }
             return v
         }
+    }
+
+    /**
+     * **배운 뒤에 앱이 업데이트된 기억**을 고른다 (Unit 8 버전 태깅).
+     *
+     * 명세의 무효화 4번 — *"`longVersionCode` 변경 → 랭킹 감점 + 사용자 확인 요청"*.
+     * **감점은 이미 랭킹이 하고 있다**(`version_match` 0.4, Unit 7). 여기는 **사람에게
+     * 보여주는 쪽**이다. 즉시 강등하지 않는 것도 명세 그대로다 — *"마이너 업데이트는 대개
+     * UI 를 안 바꾸는데 매번 전부 날리게 된다."* 판단은 사람이 한다(D층).
+     *
+     * 명세는 확인 버튼·확인 후 감점 해제까지 말하지만 **표시만** 한다 — 한 달짜리
+     * 프로젝트라 흐름을 만드는 값어치가 없다. 사람은 보고 지우거나 두면 된다.
+     *
+     * `pkg` 가 쉼표 목록이면 **그중 하나라도 버전이 같으면 최신**으로 본다. `pkgVersion`
+     * 은 리플렉터가 목록 중 버전을 아는 첫 패키지에서 가져온 값이라, 어느 패키지의 것인지
+     * 특정할 수 없기 때문이다. `pkgVersion` 이 없는 기억(사람이 쓴 것)은 판정하지 않는다.
+     */
+    private fun outdatedOf(list: List<MemoryEntity>): Set<Long> {
+        val cache = HashMap<String, Long?>()
+        fun current(pkg: String): Long? = cache.getOrPut(pkg) {
+            try { packageManager.getPackageInfo(pkg, 0).longVersionCode } catch (e: Exception) { null }
+        }
+        return list.filter { m ->
+            val v = m.pkgVersion ?: return@filter false
+            val pkgs = m.pkg?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+            val known = pkgs.mapNotNull { current(it) }
+            known.isNotEmpty() && v !in known
+        }.map { it.id }.toSet()
     }
 
     private fun fmtDate(ms: Long) =

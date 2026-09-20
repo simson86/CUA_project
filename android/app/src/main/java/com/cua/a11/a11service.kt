@@ -1032,6 +1032,13 @@ class a11service : AccessibilityService(), Executor {
                             "OK ${gateway.addFromJson(org.json.JSONObject(body))}"
                         }
                         "MEMCOUNT"  -> bench(client) { "OK ${gateway.count()}" }
+                        // 용량 상한 시험용 — 500 을 채울 수는 없으니 문턱을 한 번만 바꿔 돌린다.
+                        // 상수(ACTIVE_CAP)는 안 바뀐다. 돌려주는 값은 내린 건수.
+                        //   쓰는 법: MEMCAP <active> <pending>
+                        "MEMCAP"    -> bench(client) {
+                            val a = line.trim().split(' ').filter { it.isNotBlank() }
+                            "OK ${gateway.enforceCap(a[1].toInt(), a[2].toInt())}"
+                        }
                         "DUMP"      -> bench(client) { dumpLastRun() }
                         "RUN" -> {
                             val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
