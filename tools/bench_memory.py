@@ -122,12 +122,29 @@ def _find_adb():
 ADB = _find_adb()
 
 
-def adb(*args, check=True):
-    r = subprocess.run([ADB, *args], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
-    if check and r.returncode != 0:
-        raise RuntimeError(f"adb {' '.join(args)} 실패: {r.stderr.strip()}")
-    return r.stdout.strip()
+def adb(*args, check=True, _retries=3):
+    """⚠️ **adb 데몬이 배치 도중에 죽는다** — 실측 2026-09-21, 판단 ② 배치 2 가 8회째에서
+    `no devices/emulators found` 로 통째로 죽었다(데몬이 재시작된 직후였다). 이 파일
+    머리말이 말하는 그 불안정성이고, 에이전트 실행은 Wi-Fi 소켓이라 멀쩡한데
+    `reset()` 의 force-stop 하나 때문에 배치가 날아간다.
+
+    그래서 **짧게 재시도한다.** 기기가 정말 없으면 세 번 다 실패해 종전처럼 던진다 —
+    조용히 넘어가면 앱을 안 죽인 채로 측정이 이어져 '설정이 이미 열려 있어 0턴' 같은
+    실행이 섞인다(reset 주석 참조)."""
+    last = None
+    for i in range(_retries):
+        r = subprocess.run([ADB, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        if r.returncode == 0:
+            return r.stdout.strip()
+        last = r
+        if not check:
+            return r.stdout.strip()
+        if i < _retries - 1:
+            # 데몬이 막 재시작했으면 기기가 붙기까지 잠깐 걸린다.
+            subprocess.run([ADB, "wait-for-device"], capture_output=True, timeout=30)
+            time.sleep(2)
+    raise RuntimeError(f"adb {' '.join(args)} 실패({_retries}회): {last.stderr.strip()}")
 
 
 _ip_cache = [None]
@@ -204,11 +221,25 @@ def reset(pkg):
     time.sleep(SETTLE_S)
 
 
-def one_run(task, cond):
-    """실행 1회. 돌려주는 dict 가 그대로 결과 파일 한 줄이 된다."""
-    memories = task["memories"] if cond == "B" else []
+def one_run(task, cond, memories=None, keep_memory=False):
+    """실행 1회. 돌려주는 dict 가 그대로 결과 파일 한 줄이 된다.
+
+    [memories] 를 주면 그걸 쓰고, 안 주면 종전대로 cond=="B" 일 때만 task 의 것을 쓴다.
+    조건이 둘보다 많은 실험(tools/bench_template.py)이 이 함수를 그대로 쓰기 위한 것 —
+    검증(DUMP 대조)이 여기 들어 있어서 복사해 가면 그 검증이 갈라진다.
+
+    [keep_memory] 가 True 면 **기억을 전혀 건드리지 않는다**(MEMCLEAR 도 안 한다).
+    판단 ②(종단)는 기억이 **누적되는 것 자체가 실험 조건**이라, 매 실행 앞에서 지우면
+    설계가 통째로 무너진다. 그때는 memoryCount 검증도 뜻이 없어 건너뛴다."""
+    if memories is None:
+        # ★ keep_memory 면 아예 안 본다. 판단 ②의 과제에는 `memories` 칸이 없고(누적이
+        #   실험 조건이라 미리 세울 기억이 없다), 여기서 읽으면 조건 B 에서 KeyError 로
+        #   배치가 죽는다 — 실제로 배치 1 의 M1-B 에서 그렇게 죽었다. A·explore 는
+        #   `cond == "B"` 가 거짓이라 이 줄을 안 타서 **첫 B 실행까지 안 드러났다.**
+        memories = [] if keep_memory else (task["memories"] if cond == "B" else [])
     reset(task["pkg"])
-    set_memory(memories)
+    if not keep_memory:
+        set_memory(memories)
 
     t0 = time.time()
     reply = sock("RUN " + task["goal"], timeout=RUN_TIMEOUT)
@@ -222,7 +253,7 @@ def one_run(task, cond):
         bad.append(f"설정 불일치 {dump.get('model')}/{dump.get('thinking')}")
     if dump.get("memoryReadFailed"):
         bad.append("기억 읽기 실패")
-    if dump.get("memoryCount") != len(memories):
+    if not keep_memory and dump.get("memoryCount") != len(memories):
         bad.append(f"기억 {dump.get('memoryCount')}건 (기대 {len(memories)})")
     if dump.get("goal") != task["goal"]:
         bad.append("목표 문자열 불일치")

@@ -45,6 +45,17 @@
             android:text="전부 삭제"/>
     </LinearLayout>
 
+    <!-- 자동 추출 스위치. 기본은 꺼짐이다 — 자동 쓰기는 사람이 한 번 켜는 동작을
+         거쳐야 한다. 측정 배치에서도 꺼 둬야 한다(실행마다 API 를 한 번 더 쓰고,
+         측정 중에 기억이 늘어난다). -->
+    <CheckBox
+        android:id="@+id/memReflector"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="실행이 끝나면 기억 후보 자동 추출 (검토 대기 상태로 저장)"
+        android:textSize="13sp"/>
+
     <!-- 목록이 비었을 때만 보인다. 빈 화면에 아무 설명이 없으면
          '고장 났나'와 '아직 없다'를 구분할 수 없다. -->
     <TextView

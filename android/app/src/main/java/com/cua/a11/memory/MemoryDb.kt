@@ -126,6 +126,53 @@ data class MemoryEntity(
 )
 
 /**
+ * **어느 실행에서 어느 기억이 주입됐나** — 승격 카운터(Unit 6)의 근거 표.
+ *
+ * 왜 RAM 이 아니라 표인가 — 점수만 남기면 `score = 3` 을 보고도 "성공 3번인가, 성공 5번에
+ * 실패 2번인가"를 구분할 수 없다. Unit 4 에서 *"기억이 정말 주입됐나"* 를 `episode.note` 로
+ * 확인해야 했던 것과 **같은 질문이 점수에도 온다.** 점수는 현재값 하나뿐이라 그 자신으로는
+ * 자기를 설명하지 못한다.
+ *
+ * **행 하나 = 기억 하나 × 실행 하나.** 복합 기본키가 그걸 강제한다 — 명세 §7 의
+ * *"한 실행은 최대 +1만 기여한다"* 가 코틀린 규칙이 아니라 **스키마 제약**이 된다.
+ * `injections` 는 그 실행에서 **몇 번 주입됐나**. 이 둘을 나눠 두면 `COUNT(*)`(실행 수)와
+ * `SUM(injections)`(주입 횟수)를 모두 뽑을 수 있다 — `numRecalled` 가 섞어 버린 구분이고,
+ * Unit 7 의 랭킹이 어느 쪽을 쓸지 **지금 정하지 않아도 되게** 만든다.
+ *
+ * ⚠️ **`injections` 는 '턴 수'가 아니다.** `runAgent` 는 `note()` 를 턴이 아니라
+ * **function_call 마다** 부른다(한 턴에 호출이 여럿이면 여러 번). 대개 1턴 = 1호출이라
+ * 값이 같지만 **같다고 가정하면 안 된다** — `numRecalled` 도 같은 이유로 턴 수가 아니다.
+ *
+ * ⚠️ **`memory` 로 가는 외래키는 일부러 없다.** 사람이 기억을 지워도 이 행은 남는다.
+ * 근거를 "기록 대 기억"으로 세우지 말 것 — `episode` 는 **일화 기억**이고 리플렉터의
+ * 원재료다(기록이면서 기억이다). 선은 **주입 여부**에 있다: 모델에 가는 표는 `memory`
+ * 하나뿐이고, 기억을 지우는 건 *"앞으로 주입하지 마라"* 이지 *"그런 일이 없었다"* 가
+ * 아니다. 주입 기록까지 지우면 **과거 실행의 해석이 소급해서 망가진다.**
+ * `memory.id` 는 AUTOINCREMENT 라 재사용되지 않으므로 지워진 기억의 행이
+ * **다른 기억으로 오인될 위험은 없다.**
+ * 반대로 `run` 에는 CASCADE 를 건다 — 실행 로그를 정리하면(Unit 8) 그 실행의 주입 기록도
+ * 같이 사라지는 게 맞다.
+ */
+@Entity(
+    tableName = "memory_recall",
+    primaryKeys = ["runId", "memoryId"],
+    foreignKeys = [ForeignKey(
+        entity = RunEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["runId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index(value = ["memoryId"])],   // "이 기억이 쓰인 실행들" 조회
+)
+data class MemoryRecallEntity(
+    val runId: String,
+    val memoryId: Long,
+    /** 이 실행에서 이 기억이 주입된 횟수. APP_FACT 는 턴마다, PITFALL 은 실행당 1회 붙는다. */
+    val injections: Int,
+    val createdAt: Long,
+)
+
+/**
  * v1 → v2: memory 테이블 추가. 기존 run·episode 는 건드리지 않는다.
  *
  * DDL 은 Room 이 기대하는 것과 **정확히** 같아야 한다(app/schemas/2.json 이 정답지).
@@ -167,9 +214,33 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+/**
+ * v3 → v4: memory_recall 추가 (Unit 6 승격 카운터).
+ *
+ * DDL 은 Room 이 기대하는 것과 **정확히** 같아야 한다 — 정답지는 `app/schemas/4.json` 이고,
+ * 빌드하면 거기에 생성된다. 어긋나도 **앱은 안 죽는다**(이 파일 위쪽 주석 참조):
+ * 첫 쿼리가 `RoomRunTrace.onRunStart`(= swallow 안)라 예외가 삼켜지고 `run`·`episode` 가
+ * 조용히 안 쌓인다. 올린 뒤 반드시 `adb logcat -s a11mem:W` 를 보거나 '기억 관리' 화면을
+ * 열어 볼 것.
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `memory_recall` (" +
+                "`runId` TEXT NOT NULL, `memoryId` INTEGER NOT NULL, " +
+                "`injections` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`runId`, `memoryId`), " +
+                "FOREIGN KEY(`runId`) REFERENCES `run`(`id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_recall_memoryId` ON `memory_recall` (`memoryId`)")
+    }
+}
+
 @Database(
-    entities = [RunEntity::class, EpisodeEntity::class, MemoryEntity::class],
-    version = 3,
+    entities = [RunEntity::class, EpisodeEntity::class, MemoryEntity::class,
+        MemoryRecallEntity::class],
+    version = 4,
     exportSchema = true,   // app/schemas/ — 마이그레이션 DDL 의 정답지
 )
 abstract class MemoryDb : RoomDatabase() {
@@ -181,7 +252,8 @@ abstract class MemoryDb : RoomDatabase() {
         fun get(ctx: Context): MemoryDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 ctx.applicationContext, MemoryDb::class.java, "memory.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .build().also { instance = it }
         }
     }
 }

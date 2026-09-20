@@ -182,6 +182,7 @@ class a11service : AccessibilityService(), Executor {
         cancelled = false
         skipBlackPkgs.clear()      // "그냥 계속" 판단은 이번 실행에만 유효하다
         attended = true            // 앱에서 눌렀으니 사람이 보고 있다
+        gateway.injectEnabled = com.cua.a11.memory.MemoryGateway.injectEnabled(this)
         // 이번 판에 쓸 설정을 갈아끼운다. 따로 대입하지 말 것 — 사고수준이 이 모델에서
         // 유효한지는 '조합'을 봐야 알 수 있고(3.7·3.8 은 minimal 을 400 으로 거절한다),
         // 그 판단은 configure 안에 한 번만 둔다.
@@ -396,8 +397,10 @@ class a11service : AccessibilityService(), Executor {
     //   - 관련 없는 작업에서 읽어도 해가 없는 문장이면 기억이 아니라 system_prompt 감이다.
     //  예산·민감도 필터는 전부 MemoryGateway 안에 있다 — 여기서 다시 걸지 말 것.
 
+    // 버전을 같이 넘긴다 — 랭킹의 `version_match` 항(Unit 7)이 쓴다. 이미 foregroundApp()
+    // 이 같은 값을 만들고 있으므로 그걸 재사용한다.
     override fun appNote(): String? =
-        rootInActiveWindow?.packageName?.toString()?.let { gateway.readForApp(it) }
+        foregroundApp()?.let { gateway.readForApp(it.pkg, it.versionCode) }
 
     override fun taskNote(task: String): String? = gateway.readForTask(task)
 
@@ -419,7 +422,39 @@ class a11service : AccessibilityService(), Executor {
     private val memoryDao by lazy { com.cua.a11.memory.MemoryDb.get(this).dao() }
     private val gateway by lazy { com.cua.a11.memory.MemoryGateway(memoryDao) }
     private val runTrace: com.cua.a11.RunTrace by lazy {
-        com.cua.a11.memory.RoomRunTrace(memoryDao, gateway)
+        com.cua.a11.memory.RoomRunTrace(memoryDao, gateway, ::queueReflection)
+    }
+
+    // ── 리플렉터 (Unit 5b) ───────────────────────────────────────────────
+    /**
+     * **단일 스레드 큐**다. 별도 깃발(`reflectorBusy` 같은) 대신 이걸 쓰는 이유:
+     *  · 스레드가 하나라 리플렉터가 **겹칠 수가 없다** — 앞엣것이 끝나야 뒤엣것이 시작된다.
+     *  · 깃발이 아니라 구조라서 **샐 수가 없다.** `agentBusy` 가 true 로 새면 이후 모든
+     *    실행이 영구히 막히는데(위 주석), 큐에는 그런 실패 모드가 없다.
+     *  · 배치를 빠르게 돌려 리플렉터가 밀리면 **쌓일 뿐** 아무것도 안 깨진다.
+     */
+    private val reflectorPool = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val reflector by lazy { com.cua.a11.memory.Reflector(cu, memoryDao, gateway) }
+
+    /**
+     * 실행이 끝났다 — 되새김을 **큐에 넣기만 하고 즉시 반환한다.**
+     *
+     * ★ 여기서 그냥 돌리면 안 된다. 이 함수는 `runAgent` 의 `finally` 안에서 불리므로,
+     *   리플렉터가 끝날 때까지 ⑴ 소켓 응답이 안 나가고(측정 벽시계 오염) ⑵ `agentBusy` 가
+     *   잡혀 있어 다음 `RUN` 이 "이미 실행 중입니다" 로 거절된다. 하네스는 응답을 받자마자
+     *   다음 `RUN` 을 보내므로 **가끔** 깨진다 — 제일 찾기 어려운 종류다.
+     *
+     * 리플렉터는 화면을 안 만지므로 다음 실행과 겹쳐도 충돌하지 않는다(`agentBusy` 가
+     * 지키는 것은 화면이다). 쓰는 것도 `PENDING` 뿐이라 다음 실행의 주입을 바꾸지 않는다.
+     * ⚠️ 5c 에서 reconciliation 이 `ACTIVE` 로 승격시키기 시작하면 그 전제가 깨진다 —
+     *    실행 도중에 주입 내용이 바뀔 수 있다. 그때 이 주석을 다시 읽을 것.
+     */
+    private fun queueReflection(runId: String) {
+        if (!com.cua.a11.memory.MemoryGateway.reflectorEnabled(this)) return
+        // 실행 로그(`log` 람다)는 실행마다 넘겨받는 것이라 여기서는 이미 끝났다. 되새김의
+        // 흔적은 logcat(`a11mem`)과 **기억 목록**에 남는다 — 후보 자체가 `PENDING` 행으로
+        // 뜨고 출처가 `reflector` 로 찍히므로, 사람이 보는 면은 그쪽이 맞다.
+        reflectorPool.submit { reflector.reflect(runId) }
     }
 
     private fun captureOnce(): ByteArray {
@@ -998,6 +1033,30 @@ class a11service : AccessibilityService(), Executor {
                             "OK ${gateway.addFromJson(org.json.JSONObject(body))}"
                         }
                         "MEMCOUNT"  -> bench(client) { "OK ${gateway.count()}" }
+                        // 판단 ② 대조군 — 기억은 두고 **읽기만** 끈다.
+                        "MEMINJECT" -> bench(client) {
+                            val on = line.trim().substringAfter(" ").trim() == "on"
+                            com.cua.a11.memory.MemoryGateway.setInjectEnabled(this@a11service, on)
+                            "OK ${if (on) "on" else "off"}"
+                        }
+                        // 리플렉터 켜고 끄기 — 측정 하네스가 제어해야 한다. 체크박스를
+                        // 손으로 누르게 하면 배치를 자동으로 못 돌린다.
+                        "REFLECTOR" -> bench(client) {
+                            val on = line.trim().substringAfter(" ").trim() == "on"
+                            com.cua.a11.memory.MemoryGateway.setReflectorEnabled(this@a11service, on)
+                            "OK ${if (on) "on" else "off"}"
+                        }
+                        // 상태별 기억 수 — 축적 곡선용.
+                        "MEMSTATS"  -> bench(client) {
+                            org.json.JSONObject(gateway.stateCounts() as Map<*, *>).toString()
+                        }
+                        // 용량 상한 시험용 — 500 을 채울 수는 없으니 문턱을 한 번만 바꿔 돌린다.
+                        // 상수(ACTIVE_CAP)는 안 바뀐다. 돌려주는 값은 내린 건수.
+                        //   쓰는 법: MEMCAP <active> <pending>
+                        "MEMCAP"    -> bench(client) {
+                            val a = line.trim().split(' ').filter { it.isNotBlank() }
+                            "OK ${gateway.enforceCap(a[1].toInt(), a[2].toInt())}"
+                        }
                         "DUMP"      -> bench(client) { dumpLastRun() }
                         "RUN" -> {
                             val task = if (p.size > 1) line.trim().substringAfter(" ") else "설정 앱을 열어"
@@ -1015,6 +1074,9 @@ class a11service : AccessibilityService(), Executor {
                             cancelled = false
                             skipBlackPkgs.clear()
                             attended = false            // 소켓 = 지켜보는 사람이 없는 실행
+                            // 주입 스위치를 이번 실행에 반영한다(판단 ② 대조군).
+                            gateway.injectEnabled =
+                                com.cua.a11.memory.MemoryGateway.injectEnabled(this@a11service)
                             //
                             // ★ cancel 을 넘기지 않으면 기본값이 {false} 라 **중단이 아예 안 된다** —
                             //   앱의 중단 버튼도, 인계 타임아웃이 세우는 requestCancel() 도 무시된다.

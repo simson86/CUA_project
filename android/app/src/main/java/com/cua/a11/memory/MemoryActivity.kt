@@ -40,6 +40,10 @@ class MemoryActivity : AppCompatActivity() {
     private val gateway by lazy { MemoryGateway(MemoryDb.get(this).dao()) }
 
     private var rows: List<MemoryEntity> = emptyList()
+    /** 기억별 주입 이력(Unit 6). 목록과 함께 한 번에 읽는다. */
+    private var stats: Map<Long, RecallStat> = emptyMap()
+    /** 배운 뒤에 앱이 업데이트된 기억의 id (Unit 8 버전 태깅). */
+    private var outdated: Set<Long> = emptySet()
     private lateinit var adapter: RowAdapter
 
     private lateinit var listView: ListView
@@ -58,6 +62,22 @@ class MemoryActivity : AppCompatActivity() {
 
         listView.setOnItemClickListener { _, _, pos, _ -> showEditor(rows[pos]) }
 
+        // 자동 추출 스위치 (Unit 5b). 여기 둔 이유 — 기억을 보는 화면과 기억이 생기는
+        // 규칙을 같은 자리에서 다루는 게 맞다. 켜면 그 결과가 바로 이 목록에 PENDING 으로
+        // 쌓이므로, 켠 사람이 결과를 보는 화면도 여기다.
+        findViewById<CheckBox>(R.id.memReflector).apply {
+            isChecked = MemoryGateway.reflectorEnabled(this@MemoryActivity)
+            setOnCheckedChangeListener { _, on ->
+                MemoryGateway.setReflectorEnabled(this@MemoryActivity, on)
+                Toast.makeText(
+                    this@MemoryActivity,
+                    if (on) "자동 추출 켜짐 — 후보는 검토 대기(PENDING)로 쌓입니다"
+                    else "자동 추출 꺼짐",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+
         findViewById<Button>(R.id.memAddBtn).setOnClickListener { showEditor(null) }
         findViewById<Button>(R.id.memClearBtn).setOnClickListener { confirmClearAll() }
 
@@ -75,8 +95,13 @@ class MemoryActivity : AppCompatActivity() {
 
     // ── 데이터 ────────────────────────────────────────────────────────
     /** Room 은 메인 스레드에서 부르면 예외를 던진다 — 읽기도 반드시 백그라운드에서. */
-    private fun reload() = io({ gateway.list() }) { loaded ->
+    private fun reload() = io({
+        val loaded = gateway.list()
+        Triple(loaded, gateway.recallStats(), outdatedOf(loaded))
+    }) { (loaded, st, old) ->
         rows = loaded
+        stats = st
+        outdated = old
         adapter.notifyDataSetChanged()
         val active = loaded.count { it.state == "ACTIVE" }
         // '한 번도 안 걸린 것'을 요약에 올린다. 그 수가 크면 기억이 없는 게 아니라
@@ -85,6 +110,9 @@ class MemoryActivity : AppCompatActivity() {
         summary.text = buildString {
             append("총 ${loaded.size}건 (ACTIVE ${active}건")
             if (never > 0) append(", 그중 ${never}건은 아직 안 걸림")
+            // 사람이 확인할 거리를 요약줄에 올린다 — 명세의 "확인 필요 N건" 배지 자리다.
+            val stale = loaded.count { it.id in outdated && it.state == "ACTIVE" }
+            if (stale > 0) append(", ${stale}건은 앱이 업데이트됨")
             append(") · 항목을 누르면 고칠 수 있습니다")
         }
         empty.visibility = if (loaded.isEmpty()) View.VISIBLE else View.GONE
@@ -121,12 +149,15 @@ class MemoryActivity : AppCompatActivity() {
                 .inflate(R.layout.item_memory, parent, false)
             val m = rows[position]
 
-            val head = StringBuilder("${m.kind} · ${m.state}")
+            // 점수는 Unit 6 부터 **자동으로 움직인다.** 화면에 없으면 사용자는 상태가
+            // 왜 바뀌었는지 알 수 없다(PENDING → ACTIVE 는 score >= 2 에서 일어난다).
+            val head = StringBuilder("${m.kind} · ${m.state} · 점수 ${m.score}")
             if (m.pinned) head.append(" · 고정")
             if (m.sensitivity != "normal") head.append(" · ${m.sensitivity}")
             // 주입을 막는 사유는 목록에서 바로 보여야 한다. 안 그러면 사용자는 ACTIVE 인데
             // 왜 안 나오는지 알 길이 없다.
             if (m.invalidAt != null) head.append(" · 무효화됨")
+            if (m.id in outdated) head.append(" · 앱 업데이트됨")
             v.findViewById<TextView>(R.id.rowHead).text = head
 
             v.findViewById<TextView>(R.id.rowText).text = m.text
@@ -146,10 +177,44 @@ class MemoryActivity : AppCompatActivity() {
             v.findViewById<TextView>(R.id.rowRecall).text = when {
                 m.state != "ACTIVE" -> "주입 대상 아님 (${m.state})"
                 m.numRecalled == 0 -> "아직 한 번도 안 걸림 — 검색 키를 확인해 보세요"
-                else -> "주입 ${m.numRecalled}회 · 마지막 ${m.lastAccessed?.let { fmtDate(it) } ?: "?"}"
+                else -> buildString {
+                    append("주입 ${m.numRecalled}회")
+                    // numRecalled 는 주입 '횟수'라, 한 실행에서 20번 붙은 것과 20개 실행에
+                    // 한 번씩 붙은 것이 같은 숫자가 된다. 근거의 강도는 실행 수 쪽이다.
+                    stats[m.id]?.let { append(" · ${it.runs}개 실행(성공 ${it.successes})") }
+                    append(" · 마지막 ${m.lastAccessed?.let { t -> fmtDate(t) } ?: "?"}")
+                }
             }
             return v
         }
+    }
+
+    /**
+     * **배운 뒤에 앱이 업데이트된 기억**을 고른다 (Unit 8 버전 태깅).
+     *
+     * 명세의 무효화 4번 — *"`longVersionCode` 변경 → 랭킹 감점 + 사용자 확인 요청"*.
+     * **감점은 이미 랭킹이 하고 있다**(`version_match` 0.4, Unit 7). 여기는 **사람에게
+     * 보여주는 쪽**이다. 즉시 강등하지 않는 것도 명세 그대로다 — *"마이너 업데이트는 대개
+     * UI 를 안 바꾸는데 매번 전부 날리게 된다."* 판단은 사람이 한다(D층).
+     *
+     * 명세는 확인 버튼·확인 후 감점 해제까지 말하지만 **표시만** 한다 — 한 달짜리
+     * 프로젝트라 흐름을 만드는 값어치가 없다. 사람은 보고 지우거나 두면 된다.
+     *
+     * `pkg` 가 쉼표 목록이면 **그중 하나라도 버전이 같으면 최신**으로 본다. `pkgVersion`
+     * 은 리플렉터가 목록 중 버전을 아는 첫 패키지에서 가져온 값이라, 어느 패키지의 것인지
+     * 특정할 수 없기 때문이다. `pkgVersion` 이 없는 기억(사람이 쓴 것)은 판정하지 않는다.
+     */
+    private fun outdatedOf(list: List<MemoryEntity>): Set<Long> {
+        val cache = HashMap<String, Long?>()
+        fun current(pkg: String): Long? = cache.getOrPut(pkg) {
+            try { packageManager.getPackageInfo(pkg, 0).longVersionCode } catch (e: Exception) { null }
+        }
+        return list.filter { m ->
+            val v = m.pkgVersion ?: return@filter false
+            val pkgs = m.pkg?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+            val known = pkgs.mapNotNull { current(it) }
+            known.isNotEmpty() && v !in known
+        }.map { it.id }.toSet()
     }
 
     private fun fmtDate(ms: Long) =
@@ -175,8 +240,26 @@ class MemoryActivity : AppCompatActivity() {
             sp.setSelection(items.indexOf(want).coerceAtLeast(0))
         }
         fill(kindSp, MemoryGateway.KINDS, existing?.kind)
-        fill(stateSp, MemoryGateway.STATES, existing?.state ?: "ACTIVE")
         fill(sensSp, MemoryGateway.SENSITIVITIES, existing?.sensitivity)
+
+        // ── 상태는 '새로 만들 때'와 '고칠 때'의 요구가 정반대다 ────────────────
+        //  새 기억: ACTIVE 로 고정한다. 명세 §7 이 **사람의 판단 = 즉시 ACTIVE** 로 못
+        //   박았고, PENDING 은 *기계 출력*을 담는 검역이라 사람이 직접 쓴 문장을 거기
+        //   넣을 이유가 없다. 게다가 지금은 나가는 문이 없어(승격 = reconciliation,
+        //   Unit 5) 고르는 순간 **주입도 승격도 안 되는 행**이 된다.
+        //  고칠 때: 세 상태를 모두 연다. 리플렉터가 쌓은 PENDING 후보를 사람이 보고
+        //   ACTIVE 로 올리는 것이 설계 §8 이 말한 '아키텍처의 일부'다.
+        //
+        //  ⚠️ 여기서 MemoryGateway.STATES 자체를 줄이지 말 것. 줄이면 fill() 의
+        //   indexOf(...).coerceAtLeast(0) 이 목록에 없는 값을 **0번(ACTIVE)** 으로
+        //   되돌려, 사람이 PENDING 후보를 열었다 저장하는 것만으로 **검역이 조용히
+        //   풀린다.** 선택지를 좁히는 일은 이 분기에서만 한다.
+        if (existing == null) {
+            fill(stateSp, listOf("ACTIVE"), "ACTIVE")
+            stateSp.isEnabled = false
+        } else {
+            fill(stateSp, MemoryGateway.STATES, existing.state)
+        }
 
         // 종류에 따라 검색 키가 다르다 — APP_FACT 는 패키지로, PITFALL 은 키워드로 걸린다.
         // 둘 다 보여주면 엉뚱한 칸을 채우고 "저장은 됐는데 안 나온다"가 된다.
@@ -225,8 +308,11 @@ class MemoryActivity : AppCompatActivity() {
                 val isPitfall = kind == "PITFALL"
                 // 안 쓰는 쪽 검색 키는 비워서 저장한다. 종류를 바꿔 저장하면 옛 키가 남아
                 // 목록에 유령 정보로 뜬다.
+                // 새로 만들 때만 HUMAN_SCORE 로 시작한다. existing 은 copy() 라
+                // 지금까지의 점수가 그대로 유지된다 — 편집이 이력을 지우면 안 된다.
                 val draft = (existing ?: MemoryEntity(
                     kind = kind, text = "", source = "user_ui",
+                    score = MemoryGateway.HUMAN_SCORE,
                     timeAdded = System.currentTimeMillis(),
                 )).copy(
                     kind = kind,
